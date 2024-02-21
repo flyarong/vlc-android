@@ -11,8 +11,8 @@ import org.videolan.medialibrary.interfaces.media.MediaWrapper;
 public class AlbumImpl extends Album {
     public static final String TAG = "VLC/Album";
 
-    public AlbumImpl(long id, String title, int releaseYear, String artworkMrl, String albumArtist, long albumArtistId, int nbTracks, int nbPresentTracks, long duration) {
-        super(id, title, releaseYear, artworkMrl, albumArtist, albumArtistId, nbTracks, nbPresentTracks, duration);
+    public AlbumImpl(long id, String title, int releaseYear, String artworkMrl, String albumArtist, long albumArtistId, int nbTracks, int nbPresentTracks, long duration, boolean isFavorite) {
+        super(id, title, releaseYear, artworkMrl, albumArtist, albumArtistId, nbTracks, nbPresentTracks, duration, isFavorite);
     }
 
     public AlbumImpl(Parcel in) {
@@ -24,20 +24,20 @@ public class AlbumImpl extends Album {
         return ml.isInitiated() ? nativeGetTracksCount(ml, mId) : 0;
     }
 
-    public MediaWrapper[] getTracks(int sort, boolean desc, boolean includeMissing) {
+    public MediaWrapper[] getTracks(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites) {
         Medialibrary ml = Medialibrary.getInstance();
-        return ml.isInitiated() ? nativeGetTracks(ml, mId, sort, desc, includeMissing) : Medialibrary.EMPTY_COLLECTION;
+        return ml.isInitiated() ? nativeGetTracks(ml, mId, sort, desc, includeMissing, onlyFavorites) : Medialibrary.EMPTY_COLLECTION;
     }
 
     @Override
-    public MediaWrapper[] getPagedTracks(int sort, boolean desc, boolean includeMissing, int nbItems, int offset) {
+    public MediaWrapper[] getPagedTracks(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset) {
         final Medialibrary ml = Medialibrary.getInstance();
-        return ml.isInitiated() ? nativeGetPagedTracks(ml, mId, sort, desc, includeMissing, nbItems, offset) : Medialibrary.EMPTY_COLLECTION;
+        return ml.isInitiated() ? nativeGetPagedTracks(ml, mId, sort, desc, includeMissing, onlyFavorites, nbItems, offset) : Medialibrary.EMPTY_COLLECTION;
     }
 
-    public MediaWrapper[] searchTracks(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset) {
+    public MediaWrapper[] searchTracks(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset) {
         final Medialibrary ml = Medialibrary.getInstance();
-        return ml.isInitiated() ? nativeSearch(ml, mId, query, sort, desc, includeMissing, nbItems, offset) : Medialibrary.EMPTY_COLLECTION;
+        return ml.isInitiated() ? nativeSearch(ml, mId, query, sort, desc, includeMissing, onlyFavorites, nbItems, offset) : Medialibrary.EMPTY_COLLECTION;
     }
 
     public int searchTracksCount(String query) {
@@ -50,9 +50,20 @@ public class AlbumImpl extends Album {
         return ml.getArtist(this.albumArtistId);
     }
 
-    private native MediaWrapper[] nativeGetTracks(Medialibrary ml, long mId, int sort, boolean desc, boolean includeMissing);
-    private native MediaWrapper[] nativeGetPagedTracks(Medialibrary ml, long mId, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
-    private native MediaWrapper[] nativeSearch(Medialibrary ml, long mId, String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    @Override
+    public boolean setFavorite(boolean favorite) {
+        if (mId == 0L) return false;
+        final Medialibrary ml = Medialibrary.getInstance();
+        boolean ret = false;
+        if (ml.isInitiated())
+            ret = nativeSetFavorite(ml, mId, favorite);
+        return ret;
+    }
+
+    private native MediaWrapper[] nativeGetTracks(Medialibrary ml, long mId, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites);
+    private native MediaWrapper[] nativeGetPagedTracks(Medialibrary ml, long mId, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
+    private native MediaWrapper[] nativeSearch(Medialibrary ml, long mId, String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     private native int nativeGetTracksCount(Medialibrary ml, long id);
     private native int nativeGetSearchCount(Medialibrary ml, long mId, String query);
+    private native boolean nativeSetFavorite(Medialibrary ml, long id, boolean favorite);
 }

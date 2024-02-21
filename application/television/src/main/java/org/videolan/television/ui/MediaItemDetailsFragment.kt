@@ -52,6 +52,7 @@ import org.videolan.resources.ACTION_REMOTE_STOP
 import org.videolan.resources.FAVORITE_TITLE
 import org.videolan.resources.HEADER_DIRECTORIES
 import org.videolan.resources.HEADER_NETWORK
+import org.videolan.resources.util.parcelable
 import org.videolan.television.ui.browser.VerticalGridActivity
 import org.videolan.tools.HttpImageLoader
 import org.videolan.tools.retrieveParent
@@ -128,10 +129,10 @@ class MediaItemDetailsFragment : DetailsSupportFragment(), CoroutineScope by Mai
         arrayObjectAdapterPosters = ArrayObjectAdapter(MediaImageCardPresenter(requireActivity(), MediaImageType.POSTER))
 
         val extras = requireActivity().intent.extras ?: savedInstanceState ?: return
-        viewModel.mediaItemDetails = extras.getParcelable(EXTRA_ITEM) ?: return
+        viewModel.mediaItemDetails = extras.parcelable(EXTRA_ITEM) ?: return
         val hasMedia = extras.containsKey(org.videolan.television.ui.EXTRA_MEDIA)
         fromHistory = extras.getBoolean(EXTRA_FROM_HISTORY, false)
-        val media = (extras.getParcelable<Parcelable>(org.videolan.television.ui.EXTRA_MEDIA)
+        val media = (extras.parcelable<Parcelable>(org.videolan.television.ui.EXTRA_MEDIA)
                 ?: MLServiceLocator.getAbstractMediaWrapper(AndroidUtil.LocationToUri(viewModel.mediaItemDetails.location))) as MediaWrapper
 
         viewModel.media = media
@@ -367,7 +368,7 @@ class MediaItemDetailsFragment : DetailsSupportFragment(), CoroutineScope by Mai
                     rowsAdapter.notifyArrayItemRangeChanged(0, rowsAdapter.size())
                     Toast.makeText(activity, R.string.favorite_removed, Toast.LENGTH_SHORT).show()
                 }
-                ID_BROWSE -> TvUtil.openMedia(activity, viewModel.media, null)
+                ID_BROWSE -> TvUtil.openMedia(activity, viewModel.media)
                 ID_DL_SUBS -> MediaUtils.getSubs(requireActivity(), viewModel.media)
                 ID_PLAY_FROM_START -> {
                     viewModel.mediaStarted = false
@@ -398,9 +399,9 @@ class MediaItemDetailsFragment : DetailsSupportFragment(), CoroutineScope by Mai
             val res = resources
             if (isDir) {
                 detailsOverview.imageDrawable = ContextCompat.getDrawable(activity, if (viewModel.media.uri.scheme == "file")
-                    R.drawable.ic_menu_folder_big
+                    R.drawable.ic_folder_big
                 else
-                    R.drawable.ic_menu_network_big)
+                    R.drawable.ic_network_big)
                 detailsOverview.isImageScaleUpAllowed = true
                 actionsAdapter.set(ID_BROWSE, Action(ID_BROWSE.toLong(), res.getString(R.string.browse_folder)))
                 if (canSave) actionsAdapter.set(ID_FAVORITE, if (browserFavExists) actionDelete else actionAdd)

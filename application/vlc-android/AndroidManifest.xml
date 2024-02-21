@@ -3,8 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="org.videolan.vlc">
 
-    <uses-sdk tools:overrideLibrary="com.jraska.livedata.ktx, com.jraska.livedata, tools.fastlane.screengrab, android_libs.ub_uiautomator"/>
+    <uses-sdk tools:overrideLibrary="com.jraska.livedata.ktx, com.jraska.livedata, tools.fastlane.screengrab, android_libs.ub_uiautomator, androidx.car.app"/>
 
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission
         android:name="android.permission.READ_LOGS"
         android:maxSdkVersion="18"/> <!-- android:maxSdkVersion="15" -->
@@ -17,6 +18,9 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/> <!-- Audio search on TV -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/> <!-- USe foreground services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/> <!-- normal -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
@@ -63,6 +67,9 @@
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc"/>
         <meta-data
+            android:name="androidx.car.app.TintableAttributionIcon"
+            android:resource="@drawable/ic_auto_notif_audio"/>
+        <meta-data
             android:name="com.google.android.gms.car.notification.SmallIcon"
             android:resource="@drawable/icon"/>
         <meta-data
@@ -71,6 +78,9 @@
         <meta-data
             android:name="android.allow_multiple_resumed_activities"
             android:value="true" />
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="3" />
 
         <activity
             android:name=".StartActivity"
@@ -968,6 +978,13 @@
             android:name=".gui.LibrariesActivity"
             android:theme="@style/Theme.VLC"/>
         <activity
+            android:name=".gui.PinCodeActivity"
+            android:theme="@style/Theme.VLC"
+            android:windowSoftInputMode="adjustResize"/>
+        <activity
+                android:name=".gui.OTPCodeActivity"
+                android:theme="@style/Theme.VLC"/>
+        <activity
             android:name=".gui.AuthorsActivity"
             android:theme="@style/Theme.VLC"/>
         <activity
@@ -1036,15 +1053,30 @@
             </intent-filter>
         </activity>
 
-        <service android:name=".extensions.ExtensionManagerService"/>
-        <service android:name=".PlaybackService"
-            android:exported="true">
+        <service
+                android:name=".PlaybackService"
+                android:exported="true"
+                android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService"/>
             </intent-filter>
         </service>
-        <service android:name=".MediaParsingService"/>
 
+        <service
+            android:name=".car.VLCCarService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.SETTINGS"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="${applicationId}.car.SETTINGS" />
+            </intent-filter>
+        </service>
+
+        <service
+                android:name=".MediaParsingService"
+                android:foregroundServiceType="dataSync" />
         <receiver
             android:name=".widget.VLCAppWidgetProviderWhite"
             android:exported="false"
@@ -1096,7 +1128,7 @@
         </receiver>
 
         <receiver android:name="androidx.media.session.MediaButtonReceiver"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON"/>
             </intent-filter>
@@ -1178,7 +1210,8 @@
                 android:theme="@style/Theme.VLC"
                 android:launchMode="singleTop" />
         <service android:name=".DebugLogService"
-                android:process=":logger" />
+                android:process=":logger"
+                android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

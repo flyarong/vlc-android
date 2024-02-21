@@ -24,6 +24,7 @@
 package org.videolan.television.ui.preferences
 
 import android.annotation.TargetApi
+import android.app.Activity
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
@@ -32,10 +33,14 @@ import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
 import androidx.preference.CheckBoxPreference
 import androidx.preference.Preference
+import androidx.preference.PreferenceScreen
 import org.videolan.medialibrary.interfaces.Medialibrary
 import org.videolan.resources.*
 import org.videolan.tools.*
+import org.videolan.tools.Settings.isPinCodeSet
 import org.videolan.vlc.R
+import org.videolan.vlc.gui.PinCodeActivity
+import org.videolan.vlc.gui.PinCodeReason
 import org.videolan.vlc.gui.SecondaryActivity
 import org.videolan.vlc.gui.dialogs.ConfirmAudioPlayQueueDialog
 
@@ -49,14 +54,27 @@ class PreferencesFragment : BasePreferenceFragment(), SharedPreferences.OnShared
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         findPreference<Preference>(SCREEN_ORIENTATION)?.isVisible = false
-        findPreference<Preference>("extensions_category")?.isVisible = false
         findPreference<Preference>("casting_category")?.isVisible = false
         findPreference<Preference>(KEY_VIDEO_APP_SWITCH)?.isVisible = AndroidDevices.hasPiP
+        findPreference<Preference>("remote_access_category")?.isVisible = Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1
     }
 
     override fun onStart() {
         super.onStart()
-        preferenceScreen.sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.registerOnSharedPreferenceChangeListener(this)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode == Activity.RESULT_OK) {
+            when (requestCode) {
+                0 -> {
+                    val preferenceScreen: PreferenceScreen? = findPreference("parental_control") as PreferenceScreen?
+                    onPreferenceTreeClick(preferenceScreen!!)
+                }
+            }
+        }
     }
 
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
@@ -76,6 +94,13 @@ class PreferencesFragment : BasePreferenceFragment(), SharedPreferences.OnShared
                     activity.setResult(RESULT_RESTART)
                 }
                 true
+            }
+            "parental_control" -> {
+                if (!activity.isPinCodeSet()) {
+                    val intent = PinCodeActivity.getIntent(activity, PinCodeReason.FIRST_CREATION)
+                    startActivityForResult(intent, 0)
+                    true
+                } else super.onPreferenceTreeClick(preference)
             }
             AUDIO_RESUME_PLAYBACK -> {
 
@@ -118,7 +143,6 @@ class PreferencesFragment : BasePreferenceFragment(), SharedPreferences.OnShared
     }
 
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
-        val activity = activity ?: return
         when (key) {
             PLAYBACK_HISTORY -> {
                 if (sharedPreferences!!.getBoolean(key, true)) {

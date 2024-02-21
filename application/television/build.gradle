@@ -2,15 +2,14 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-kapt'
 apply plugin: 'kotlin-parcelize'
+
 android {
-    compileSdkVersion rootProject.ext.compileSdkVersion
+
     packagingOptions {
         jniLibs {
             pickFirsts += ['**/*.so']
         }
     }
-
-    kotlinOptions.jvmTarget = "1.8"
 
     viewBinding.enabled = true
 
@@ -19,6 +18,7 @@ android {
     defaultConfig {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
+        compileSdk rootProject.ext.compileSdkVersion
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles 'consumer-rules.pro'

@@ -25,6 +25,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.os.Vibrator
 import android.support.v4.media.session.PlaybackStateCompat
 import android.text.Editable
@@ -74,11 +75,16 @@ import org.videolan.vlc.gui.helpers.*
 import org.videolan.vlc.gui.helpers.AudioUtil.setRingtone
 import org.videolan.vlc.gui.helpers.UiTools.addToPlaylist
 import org.videolan.vlc.gui.helpers.UiTools.isTablet
+import org.videolan.vlc.gui.helpers.UiTools.showPinIfNeeded
 import org.videolan.vlc.gui.video.VideoPlayerActivity
 import org.videolan.vlc.gui.view.AudioMediaSwitcher
 import org.videolan.vlc.gui.view.AudioMediaSwitcher.AudioMediaSwitcherListener
 import org.videolan.vlc.manageAbRepeatStep
+import org.videolan.vlc.media.PlaylistManager
 import org.videolan.vlc.media.PlaylistManager.Companion.hasMedia
+import org.videolan.vlc.util.ContextOption
+import org.videolan.vlc.util.ContextOption.*
+import org.videolan.vlc.util.FlagSet
 import org.videolan.vlc.util.TextUtils
 import org.videolan.vlc.util.launchWhenStarted
 import org.videolan.vlc.util.share
@@ -97,17 +103,19 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
     private lateinit var binding: AudioPlayerBinding
     private lateinit var playlistAdapter: PlaylistAdapter
     private lateinit var settings: SharedPreferences
-    private val handler by lazy(LazyThreadSafetyMode.NONE) { Handler() }
+    private val handler by lazy(LazyThreadSafetyMode.NONE) { Handler(Looper.getMainLooper()) }
     lateinit var playlistModel: PlaylistModel
     lateinit var bookmarkModel: BookmarkModel
     private lateinit var optionsDelegate: PlayerOptionsDelegate
-    private lateinit var bookmarkListDelegate: BookmarkListDelegate
+    lateinit var bookmarkListDelegate: BookmarkListDelegate
 
     private var showRemainingTime = false
     private var previewingSeek = false
     private var playerState = 0
     private lateinit var pauseToPlay: AnimatedVectorDrawableCompat
     private lateinit var playToPause: AnimatedVectorDrawableCompat
+    private lateinit var pauseToPlayHeader: AnimatedVectorDrawableCompat
+    private lateinit var playToPauseHeader: AnimatedVectorDrawableCompat
     private lateinit var pauseToPlaySmall: AnimatedVectorDrawableCompat
     private lateinit var playToPauseSmall: AnimatedVectorDrawableCompat
 
@@ -126,10 +134,6 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
         playlistAdapter = PlaylistAdapter(this)
         settings = Settings.getInstance(requireContext())
         playlistModel = PlaylistModel.get(this)
-        playlistModel.service?.let {
-            if (!it.isVideoPlaying && it.videoTracksCount > 0)
-                UiTools.snacker(requireActivity(), R.string.return_to_video)
-        }
         playlistModel.progress.observe(this@AudioPlayer) { it?.let { updateProgress(it) } }
         playlistModel.speed.observe(this@AudioPlayer) { showChips() }
         playlistAdapter.setModel(playlistModel)
@@ -145,6 +149,11 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
         Settings.setAudioControlsChangeListener {
             lifecycleScope.launchWhenStarted {
                 doUpdate()
+            }
+        }
+        lifecycleScope.launchWhenStarted {
+            PlaylistManager.repeating.collect {
+                updateRepeatMode()
             }
         }
     }
@@ -192,6 +201,8 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
         //For resizing purpose, we have to cache this twice even if it's from the same resource
         playToPause = AnimatedVectorDrawableCompat.create(requireActivity(), R.drawable.anim_play_pause_video)!!
         pauseToPlay = AnimatedVectorDrawableCompat.create(requireActivity(), R.drawable.anim_pause_play_video)!!
+        playToPauseHeader = AnimatedVectorDrawableCompat.create(requireActivity(), R.drawable.anim_play_pause_video)!!
+        pauseToPlayHeader = AnimatedVectorDrawableCompat.create(requireActivity(), R.drawable.anim_pause_play_video)!!
         playToPauseSmall = AnimatedVectorDrawableCompat.create(requireActivity(), R.drawable.anim_play_pause_video)!!
         pauseToPlaySmall = AnimatedVectorDrawableCompat.create(requireActivity(), R.drawable.anim_pause_play_video)!!
         onSlide(0f)
@@ -212,7 +223,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
         }
 
         abRepeatAddMarker.setOnClickListener {
-            playlistModel.service?.playlistManager?.setABRepeatValue(binding.timeline.progress.toLong())
+            playlistModel.service?.playlistManager?.setABRepeatValue(playlistModel.service?.playlistManager?.getCurrentMedia(), binding.timeline.progress.toLong())
         }
 
         audioPlayProgressMode = Settings.getInstance(requireActivity()).getBoolean(AUDIO_PLAY_PROGRESS_MODE, false)
@@ -255,6 +266,12 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
         setBottomMargin()
     }
 
+    override fun onDestroy() {
+        Settings.removeAudioControlsChangeListener()
+        binding.songsList.adapter = null
+        super.onDestroy()
+    }
+
     fun setBottomMargin() {
         (binding.playPause.layoutParams as? ConstraintLayout.LayoutParams)?.let {
             val audioPlayerContainerActivity = (requireActivity() as AudioPlayerContainerActivity)
@@ -285,6 +302,17 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
     override fun onResume() {
         onStateChanged(playerState)
         showRemainingTime = Settings.getInstance(requireContext()).getBoolean(SHOW_REMAINING_TIME, false)
+        val restoreVideoTipCount = settings.getInt(PREF_RESTORE_VIDEO_TIPS_SHOWN, 0)
+        val forceRestoreVideo = settings.getBoolean(RESTORE_BACKGROUND_VIDEO, false)
+        playlistModel.service?.let {
+            if (!it.isVideoPlaying && it.videoTracksCount > 0)
+                if ( !forceRestoreVideo && restoreVideoTipCount < 4) {
+                    UiTools.snacker(requireActivity(), R.string.return_to_video)
+                    settings.putSingle(PREF_RESTORE_VIDEO_TIPS_SHOWN, restoreVideoTipCount + 1)
+                } else if (forceRestoreVideo && !PlaylistManager.playingAsAudio) {
+                    onResumeToVideoClick()
+                }
+        }
         super.onResume()
     }
 
@@ -296,7 +324,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
     }
 
     private val ctxReceiver: CtxActionReceiver = object : CtxActionReceiver {
-        override fun onCtxAction(position: Int, option: Long) {
+        override fun onCtxAction(position: Int, option: ContextOption) {
             if (position in 0 until playlistAdapter.itemCount) when (option) {
                 CTX_SET_RINGTONE -> activity?.setRingtone(playlistAdapter.getItem(position))
                 CTX_ADD_TO_PLAYLIST -> {
@@ -311,10 +339,15 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
                     }
                     playlistModel.remove(position)
                 }
-                CTX_STOP_AFTER_THIS -> playlistModel.stopAfter(position)
+                CTX_STOP_AFTER_THIS -> {
+                    val pos = if (playlistModel.service?.playlistManager?.stopAfter != position) position else -1
+                    playlistModel.stopAfter(pos)
+                    playlistAdapter.stopAfter = pos
+                }
                 CTX_INFORMATION -> showInfoDialog(playlistAdapter.getItem(position))
                 CTX_GO_TO_FOLDER -> showParentFolder(playlistAdapter.getItem(position))
                 CTX_SHARE -> lifecycleScope.launch { (requireActivity() as AppCompatActivity).share(playlistAdapter.getItem(position)) }
+                else -> {}
             }
         }
     }
@@ -328,10 +361,14 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
     override fun onPopupMenu(view: View, position: Int, item: MediaWrapper?) {
         val activity = activity
         if (activity === null || position >= playlistAdapter.itemCount) return
-        var flags = CTX_REMOVE_FROM_PLAYLIST or CTX_STOP_AFTER_THIS or CTX_INFORMATION or CTX_GO_TO_FOLDER
-        if (item?.uri?.scheme != "content") flags = flags or CTX_ADD_TO_PLAYLIST or CTX_SHARE or CTX_SET_RINGTONE
+        val flags = FlagSet(ContextOption::class.java).apply {
+            addAll(CTX_GO_TO_FOLDER, CTX_INFORMATION, CTX_REMOVE_FROM_PLAYLIST, CTX_STOP_AFTER_THIS)
+            if (item?.uri?.scheme != "content") addAll(CTX_ADD_TO_PLAYLIST, CTX_SET_RINGTONE, CTX_SHARE)
+        }
         showContext(activity, ctxReceiver, position, item, flags)
     }
+
+    override fun getLifeCycle() = this.lifecycle
 
     private suspend fun doUpdate() {
         if (isVisible && playlistModel.switchToVideo()) return
@@ -345,7 +382,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
             binding.trackInfoContainer?.contentDescription = getString(R.string.talkback_audio_player,TalkbackUtil.getAudioTrack(requireActivity(), it))
         }
 
-        val chapter = playlistModel.service?.getCurrentChapter(true)
+        val chapter = playlistModel.service?.getCurrentChapter()
         binding.songTitle?.text = if (!chapter.isNullOrEmpty()) chapter else  playlistModel.title
         binding.songSubtitle?.text = if (!chapter.isNullOrEmpty()) TextUtils.separatedString(playlistModel.title, playlistModel.artist) else TextUtils.separatedString(playlistModel.artist, playlistModel.album)
         binding.songTitle?.isSelected = true
@@ -369,12 +406,14 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
 
         val drawable = if (playing) playToPause else pauseToPlay
         val drawableSmall = if (playing) playToPauseSmall else pauseToPlaySmall
+        val drawableHeaderLarge = if (playing) playToPauseHeader else pauseToPlayHeader
         binding.playPause.setImageDrawable(drawable)
-        binding.headerLargePlayPause.setImageDrawable(drawable)
+        binding.headerLargePlayPause.setImageDrawable(drawableHeaderLarge)
         binding.headerPlayPause.setImageDrawable(drawableSmall)
         if (playing != wasPlaying) {
             drawable.start()
             drawableSmall.start()
+            drawableHeaderLarge.start()
         }
 
         playlistAdapter.setCurrentlyPlaying(playing)
@@ -418,7 +457,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
             else -> {
                 arrayOf(binding.repeat, binding.headerRepeat).forEach {
                     it.setImageResource(R.drawable.ic_repeat_audio)
-                    it.contentDescription = ctx.getString(R.string.repeat)
+                    it.contentDescription = ctx.getString(R.string.repeat_none)
                 }
             }
         }
@@ -433,13 +472,13 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
      */
     private fun updateProgress(progress: PlaybackProgress) {
         if (playlistModel.currentMediaPosition == -1) return
-        binding.length.text = progress.lengthText
+        binding.length.text = if (showRemainingTime) Tools.millisToString(progress.time - progress.length) else progress.lengthText
         binding.timeline.max = progress.length.toInt()
         binding.progressBar.max = progress.length.toInt()
 
         if (!previewingSeek) {
-            val displayTime = if (showRemainingTime) Tools.millisToString(progress.time - progress.length) else progress.timeText
-            binding.headerTime.text = displayTime
+            val displayTime = progress.timeText
+            binding.headerTime.text = if (showRemainingTime) Tools.millisToString(progress.time - progress.length) else displayTime
             binding.time.text = displayTime
             if (!isDragging) binding.timeline.progress = progress.time.toInt()
             binding.progressBar.progress = progress.time.toInt()
@@ -464,8 +503,9 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
                 val progressTimeDescription =  TalkbackUtil.millisToString(requireActivity(), if (showRemainingTime && totalTime > 0) totalTime - progressTime else progressTime)
                 val currentProgressText = if (progressTimeText.isNullOrEmpty()) "0:00" else progressTimeText
 
-                val textTrack = getString(R.string.track_index, "${playlistModel.currentMediaPosition + 1} / ${medias.size}")
-                val textTrackDescription = getString(R.string.talkback_track_index, "${playlistModel.currentMediaPosition + 1}", "${medias.size}")
+                val size = if (playlistModel.service?.playlistManager?.stopAfter != -1 ) (playlistModel.service?.playlistManager?.stopAfter ?: 0) + 1 else medias.size
+                val textTrack = getString(R.string.track_index, "${playlistModel.currentMediaPosition + 1} / $size")
+                val textTrackDescription = getString(R.string.talkback_track_index, "${playlistModel.currentMediaPosition + 1}", "$size")
 
                 val textProgress = if (audioPlayProgressMode) {
                     val endsAt = System.currentTimeMillis() + totalTime - progressTime
@@ -506,7 +546,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
         }
     }
 
-    private fun shouldHidePlayProgress() = abRepeatAddMarker.visibility != View.GONE || (::bookmarkListDelegate.isInitialized && bookmarkListDelegate.visible) || playlistModel.medias?.size ?: 0 < 2
+    private fun shouldHidePlayProgress() = abRepeatAddMarker.visibility != View.GONE || areBookmarksVisible() || playlistModel.medias?.size ?: 0 < 2
 
     override fun onSelectionSet(position: Int) {
         binding.songsList.scrollToPosition(position)
@@ -556,6 +596,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
             if (position < 0) position = 0
             if (position > service.length) position = service.length
             service.seek(position, service.length.toDouble(), true)
+            service.playlistManager.player.updateProgress(position)
             if (service.playlistManager.player.lastPosition == 0.0f && (forward || service.getTime() > 0))
                 UiTools.snacker(requireActivity(), getString(R.string.unseekable_stream))
         }
@@ -624,7 +665,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
             val activity = activity as? AppCompatActivity ?: return
             optionsDelegate = PlayerOptionsDelegate(activity, service)
             optionsDelegate.setBookmarkClickedListener {
-                showBookmarks()
+                lifecycleScope.launch { if (!activity.showPinIfNeeded()) showBookmarks() }
             }
         }
         optionsDelegate.show()
@@ -647,20 +688,21 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
     }
 
     fun onSearchClick(v: View) {
+        if (isShowingCover()) onPlaylistSwitchClick(binding.playlistSwitch)
         manageSearchVisibilities(true)
         binding.playlistSearchText.editText?.requestFocus()
-        if (isShowingCover()) onPlaylistSwitchClick(binding.playlistSwitch)
         val imm = v.context.applicationContext.getSystemService<InputMethodManager>()!!
         imm.showSoftInput(binding.playlistSearchText.editText, InputMethodManager.SHOW_IMPLICIT)
         handler.postDelayed(hideSearchRunnable, SEARCH_TIMEOUT_MILLIS)
     }
 
     fun onABRepeatStopClick(@Suppress("UNUSED_PARAMETER") v: View) {
+        playlistModel.service?.playlistManager?.resetABRepeatValues(playlistModel.service?.playlistManager?.getCurrentMedia())
         playlistModel.service?.playlistManager?.clearABRepeat()
     }
 
     fun onABRepeatResetClick(@Suppress("UNUSED_PARAMETER") v: View) {
-        playlistModel.service?.playlistManager?.resetABRepeatValues()
+        playlistModel.service?.playlistManager?.resetABRepeatValues(playlistModel.service?.playlistManager?.getCurrentMedia())
     }
 
     override fun beforeTextChanged(charSequence: CharSequence, start: Int, before: Int, count: Int) {}
@@ -670,12 +712,14 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
             optionsDelegate.hide()
             return true
         }
-        if (::bookmarkListDelegate.isInitialized && bookmarkListDelegate.visible) {
+        if (areBookmarksVisible()) {
             bookmarkListDelegate.hide()
             return true
         }
         return clearSearch()
     }
+
+    fun areBookmarksVisible() = ::bookmarkListDelegate.isInitialized && bookmarkListDelegate.visible
 
     fun clearSearch(): Boolean {
         if (this::playlistModel.isInitialized) playlistModel.filter(null)
@@ -728,7 +772,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
                     else if (possibleSeek <= 4000) possibleSeek = 0
                 }
 
-                binding.time.text = Tools.millisToString(if (showRemainingTime) possibleSeek - length else possibleSeek.toLong())
+                binding.time.text = Tools.millisToString(possibleSeek.toLong())
                 binding.timeline.progress = possibleSeek
                 binding.progressBar.progress = possibleSeek
                 handler.postDelayed(this, 50)
@@ -795,7 +839,7 @@ class AudioPlayer : Fragment(), PlaylistAdapter.IPlayer, TextWatcher, IAudioPlay
         override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
             if (fromUser) {
                 playlistModel.setTime(progress.toLong(), true)
-                binding.time.text = Tools.millisToString(if (showRemainingTime) progress - playlistModel.length else progress.toLong())
+                binding.time.text = Tools.millisToString(progress.toLong())
                 binding.headerTime.text = Tools.millisToString(progress.toLong())
                 binding.timeline.forceAccessibilityUpdate()
             }

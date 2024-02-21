@@ -50,6 +50,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.text.DecimalFormat
 
 
 object BitmapUtil {
@@ -108,6 +109,30 @@ object BitmapUtil {
         return cover
     }
 
+    fun convertBitmapToByteArray(bitmap: Bitmap): ByteArray? {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream)
+        return stream.toByteArray()
+    }
+
+
+    /**
+     * Encode bitmap in WEBP format.
+     */
+    @Suppress("DEPRECATION")
+    fun encodeImage(bmp: Bitmap?, enableTracing:Boolean = false, timestampProvider: (() -> String?)? = null): ByteArray? {
+        if (bmp == null) return null
+        val bos = ByteArrayOutputStream()
+        val startTime = if (enableTracing) System.currentTimeMillis() else 0L
+        bmp.compress(Bitmap.CompressFormat.WEBP, 100, bos)
+        if (enableTracing) {
+            val endTime = System.currentTimeMillis()
+            val ratio = DecimalFormat("###.#%").format((1 - (bos.size().toDouble() / bmp.byteCount.toDouble())))
+            Log.d("VLC/ArtworkProvider", "encImage() Time: ${timestampProvider?.let { it() } ?: ""} Duration: " + (endTime - startTime) + "ms Comp. Ratio: $ratio Thread: ${Thread.currentThread().name}")
+        }
+        return bos.toByteArray()
+    }
+
 
     fun centerCrop(srcBmp: Bitmap, width: Int, height: Int): Bitmap {
         val widthDiff = srcBmp.width - width
@@ -148,8 +173,8 @@ object BitmapUtil {
         }
     }
 
-    fun vectorToBitmap(context: Context, @DrawableRes resVector: Int, width: Int? = null, height: Int? = null): Bitmap? {
-        val drawable = AppCompatResources.getDrawable(context, resVector) ?: return null
+    fun vectorToBitmap(context: Context, @DrawableRes resVector: Int, width: Int? = null, height: Int? = null): Bitmap {
+        val drawable = AppCompatResources.getDrawable(context, resVector) ?: throw IllegalStateException("Invalid drawable")
         val b = Bitmap.createBitmap(width ?: drawable.intrinsicWidth, height
                 ?: drawable.intrinsicHeight, Bitmap.Config.ARGB_8888)
         val c = Canvas(b)

@@ -61,7 +61,6 @@ object AudioUtil {
             Permissions.checkWriteSettingsPermission(this, Permissions.PERMISSION_SYSTEM_RINGTONE)
             return
         }
-        val view = window.decorView.findViewById(R.id.coordinator) ?: window.decorView
         lifecycleScope.snackerConfirm(this, getString(R.string.set_song_question, song.title)) {
             val newRingtone = AndroidUtil.UriToFile(song.uri)
             if (!withContext(Dispatchers.IO) { newRingtone.exists() }) {
@@ -86,7 +85,10 @@ object AudioUtil {
                     val newUri: Uri = this.contentResolver
                             .insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)!!
                     contentResolver.openOutputStream(newUri).use { os ->
+                        val runtime = Runtime.getRuntime()
+                        val availHeapSizeInMB = runtime.maxMemory() - runtime.totalMemory() - runtime.freeMemory()
                         val size = newRingtone.length().toInt()
+                        if (size > availHeapSizeInMB * 0.8F) throw IllegalStateException("Not enough memory")
                         val bytes = ByteArray(size)
                         val buf = BufferedInputStream(FileInputStream(newRingtone))
                         buf.read(bytes, 0, bytes.size)
@@ -182,8 +184,8 @@ object AudioUtil {
 
     //TODO Make it a suspend function to get rid of runBlocking {... }
     @WorkerThread
-    fun readCoverBitmap(path: String?, width: Int): Bitmap? {
-        val path = path ?: return null
+    fun readCoverBitmap(requestedPath: String?, width: Int): Bitmap? {
+        val path = requestedPath ?: return null
         if (isSchemeHttpOrHttps(path)) return runBlocking(Dispatchers.Main) {
             HttpImageLoader.downloadBitmap(path)
         }
@@ -191,9 +193,9 @@ object AudioUtil {
     }
 
     @WorkerThread
-    fun fetchCoverBitmap(path: String, width: Int): Bitmap? {
-        val path = path.removeFileScheme()
-        if (path.isNullOrEmpty() || !File(path).exists()) return null
+    fun fetchCoverBitmap(requestedPath: String, width: Int): Bitmap? {
+        val path = requestedPath.removeFileScheme()
+        if (path.isEmpty() || !File(path).exists()) return null
         var cover: Bitmap? = null
         val options = BitmapFactory.Options()
 

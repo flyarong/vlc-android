@@ -17,7 +17,7 @@
     <shortcut
         android:shortcutId="browser"
         android:enabled="true"
-        android:icon="@drawable/ic_menu_folder"
+        android:icon="@drawable/ic_folder"
         android:shortcutShortLabel="@string/directories"
         android:shortcutLongLabel="@string/directories" >
         <intent
@@ -27,21 +27,9 @@
         <categories android:name="vlc.shortcut.category" />
     </shortcut>
     <shortcut
-        android:shortcutId="playlists"
-        android:enabled="true"
-        android:icon="@drawable/ic_menu_playlist"
-        android:shortcutShortLabel="@string/playlists"
-        android:shortcutLongLabel="@string/playlists" >
-        <intent
-            android:action="vlc.shortcut.playlists"
-            android:targetPackage="org.videolan.vlc"
-            android:targetClass="org.videolan.vlc.StartActivity" />
-        <categories android:name="vlc.shortcut.category" />
-    </shortcut>
-    <shortcut
         android:shortcutId="video"
         android:enabled="false"
-        android:icon="@drawable/ic_menu_video"
+        android:icon="@drawable/ic_video"
         android:shortcutShortLabel="@string/video"
         android:shortcutLongLabel="@string/video"
         tools:targetApi="n_mr1">
@@ -59,18 +47,6 @@
         android:shortcutLongLabel="@string/audio">
         <intent
             android:action="vlc.shortcut.audio"
-            android:targetPackage="org.videolan.vlc"
-            android:targetClass="org.videolan.vlc.StartActivity" />
-        <categories android:name="vlc.shortcut.category" />
-    </shortcut>
-    <shortcut
-        android:shortcutId="network"
-        android:enabled="false"
-        android:icon="@drawable/ic_menu_network"
-        android:shortcutShortLabel="@string/network_browsing"
-        android:shortcutLongLabel="@string/network_browsing" >
-        <intent
-            android:action="vlc.shortcut.network"
             android:targetPackage="org.videolan.vlc"
             android:targetClass="org.videolan.vlc.StartActivity" />
         <categories android:name="vlc.shortcut.category" />

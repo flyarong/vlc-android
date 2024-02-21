@@ -3,16 +3,19 @@ package org.videolan.medialibrary.interfaces.media;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.text.TextUtils;
+import android.util.Log;
 
+import org.videolan.BuildConfig;
 import org.videolan.libvlc.util.VLCUtil;
-import org.videolan.medialibrary.R;
+import org.videolan.medialibrary.MLContextTools;
 import org.videolan.medialibrary.MLServiceLocator;
+import org.videolan.medialibrary.R;
 import org.videolan.medialibrary.interfaces.Medialibrary;
 import org.videolan.medialibrary.media.MediaLibraryItem;
 
 public abstract class Album extends MediaLibraryItem {
     public static class SpecialRes {
-        public static String UNKNOWN_ALBUM = Medialibrary.getContext().getString(R.string.unknown_album);
+        public static String UNKNOWN_ALBUM = MLContextTools.getInstance().getContext().getString(R.string.unknown_album);
     }
 
     protected int releaseYear;
@@ -23,7 +26,7 @@ public abstract class Album extends MediaLibraryItem {
     protected long duration;
     public int mPresentTracksCount;
 
-    public Album(long id, String title, int releaseYear, String artworkMrl, String albumArtist, long albumArtistId, int nbTracks, int nbPresentTracks, long duration) {
+    public Album(long id, String title, int releaseYear, String artworkMrl, String albumArtist, long albumArtistId, int nbTracks, int nbPresentTracks, long duration, boolean isFavorite) {
         super(id, title);
         this.releaseYear = releaseYear;
         this.artworkMrl = artworkMrl != null ? VLCUtil.UriFromMrl(artworkMrl).getPath() : null;
@@ -32,6 +35,7 @@ public abstract class Album extends MediaLibraryItem {
         this.mTracksCount = nbTracks;
         this.mPresentTracksCount = nbPresentTracks;
         this.duration = duration;
+        this.mFavorite = isFavorite;
         if (TextUtils.isEmpty(title)) mTitle = SpecialRes.UNKNOWN_ALBUM;
         if (albumArtistId == 1L) {
             this.albumArtist = Artist.SpecialRes.UNKNOWN_ARTIST;
@@ -47,14 +51,17 @@ public abstract class Album extends MediaLibraryItem {
         this.albumArtist = in.readString();
         this.albumArtistId = in.readLong();
         this.mTracksCount = in.readInt();
+        this.mPresentTracksCount = in.readInt();
         this.duration = in.readLong();
+        this.mFavorite = in.readInt() == 1;
+        if (BuildConfig.DEBUG) Log.d("Parcel test", "During unparcel: "+mFavorite);
         this.mPresentTracksCount = in.readInt();
     }
 
     abstract public int getRealTracksCount();
-    abstract public MediaWrapper[] getTracks(int sort, boolean desc, boolean includeMissing);
-    abstract public MediaWrapper[] getPagedTracks(int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
-    abstract public MediaWrapper[] searchTracks(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public MediaWrapper[] getTracks(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites);
+    abstract public MediaWrapper[] getPagedTracks(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
+    abstract public MediaWrapper[] searchTracks(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int searchTracksCount(String query);
     abstract public Artist retrieveAlbumArtist();
 
@@ -91,7 +98,7 @@ public abstract class Album extends MediaLibraryItem {
 
     @Override
     public MediaWrapper[] getTracks() {
-        return getTracks(Medialibrary.SORT_DEFAULT, false, true);
+        return getTracks(Medialibrary.SORT_DEFAULT, false, true, false);
     }
 
     @Override
@@ -106,6 +113,7 @@ public abstract class Album extends MediaLibraryItem {
     public int getPresentTracksCount() {
         return mPresentTracksCount;
     }
+
 
     public static Parcelable.Creator<Album> CREATOR
             = new Parcelable.Creator<Album>() {
@@ -130,6 +138,7 @@ public abstract class Album extends MediaLibraryItem {
         parcel.writeInt(mTracksCount);
         parcel.writeInt(mPresentTracksCount);
         parcel.writeLong(duration);
+        parcel.writeInt(mFavorite ? 1 : 0);
         parcel.writeInt(mTracksCount);
     }
 }

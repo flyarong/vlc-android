@@ -30,6 +30,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.videolan.resources.AppContextProvider
+import org.videolan.resources.util.getPackageInfoCompat
+import org.videolan.vlc.R
 import java.security.MessageDigest
 import java.security.NoSuchAlgorithmException
 
@@ -45,6 +47,10 @@ object AccessControl {
 
     init {
         platformSignature = getSignature(AppContextProvider.appContext, "android")
+    }
+
+    fun getKeysByPackage(packageName: String): List<String> {
+        return certificateAllowList[packageName]?.keys ?: emptyList()
     }
 
     /**
@@ -109,8 +115,7 @@ object AccessControl {
     private suspend fun loadAuthorizedKeys(): Map<String, CertInfo> {
         return withContext(Dispatchers.IO) {
             val certificateAllowList = mutableMapOf<String, CertInfo>()
-            val ctx = AppContextProvider.appContext
-            val jsonData = ctx.assets.open("authorized_keys.json").bufferedReader().use {
+            val jsonData = AppContextProvider.appResources.openRawResource(R.raw.authorized_keys).bufferedReader().use {
                 it.readText()
             }
             val signatures = JSONArray(jsonData)
@@ -133,7 +138,7 @@ object AccessControl {
     @Suppress("deprecation")
     private fun getSignature(ctx: Context, callingPackage: String): String? {
         try {
-            val packageInfo = ctx.packageManager.getPackageInfo(callingPackage, PackageManager.GET_SIGNATURES)
+            val packageInfo = ctx.packageManager.getPackageInfoCompat(callingPackage, PackageManager.GET_SIGNATURES)
             if (packageInfo.signatures != null && packageInfo.signatures.size == 1) {
                 return genSigSha256(packageInfo.signatures[0].toByteArray())
             }

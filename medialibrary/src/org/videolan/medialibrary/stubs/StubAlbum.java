@@ -14,8 +14,8 @@ public class StubAlbum extends Album {
 
     private StubDataSource dt = StubDataSource.getInstance();
 
-    public StubAlbum(long id, String title, int releaseYear, String artworkMrl, String albumArtist, long albumArtistId, int nbTracks, int nbPresentTracks, long duration) {
-        super(id, title, releaseYear, artworkMrl, albumArtist, albumArtistId, nbTracks, nbPresentTracks, duration);
+    public StubAlbum(long id, String title, int releaseYear, String artworkMrl, String albumArtist, long albumArtistId, int nbTracks, int nbPresentTracks, long duration, boolean isFavorite) {
+        super(id, title, releaseYear, artworkMrl, albumArtist, albumArtistId, nbTracks, nbPresentTracks, duration, isFavorite);
     }
 
     public StubAlbum(Parcel in) {
@@ -46,15 +46,15 @@ public class StubAlbum extends Album {
         return results;
     }
 
-    public MediaWrapper[] getTracks(int sort, boolean desc, boolean includeMissing) {
+    public MediaWrapper[] getTracks(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites) {
         return dt.sortMedia(getAlbumTracks(), sort, desc);
     }
 
-    public MediaWrapper[] getPagedTracks(int sort, boolean desc, boolean includeMissing, int nbItems, int offset) {
+    public MediaWrapper[] getPagedTracks(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset) {
         return dt.sortMedia(dt.secureSublist(getAlbumTracks(), offset, offset + nbItems), sort, desc);
     }
 
-    public MediaWrapper[] searchTracks(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset) {
+    public MediaWrapper[] searchTracks(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset) {
         ArrayList<MediaWrapper> results = new ArrayList<>();
         for (MediaWrapper media : dt.mAudioMediaWrappers) {
             if (media.getAlbum().equals(this.getTitle()) ||
@@ -75,4 +75,7 @@ public class StubAlbum extends Album {
         }
         return count;
     }
+
+    @Override
+    public boolean setFavorite(boolean favorite) { return true; }
 }

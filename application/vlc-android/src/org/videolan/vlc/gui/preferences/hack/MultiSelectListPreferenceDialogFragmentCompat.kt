@@ -6,7 +6,6 @@ import androidx.preference.DialogPreference
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceDialogFragmentCompat
-import java.util.*
 
 class MultiSelectListPreferenceDialogFragmentCompat : PreferenceDialogFragmentCompat(), DialogPreference.TargetFragment {
     private val newValues = HashSet<String>()
@@ -29,12 +28,12 @@ class MultiSelectListPreferenceDialogFragmentCompat : PreferenceDialogFragmentCo
             return result
         }
 
-    override fun onPrepareDialogBuilder(builder: AlertDialog.Builder?) {
+    override fun onPrepareDialogBuilder(builder: AlertDialog.Builder) {
         super.onPrepareDialogBuilder(builder)
         val preference = listPreference
         if (preference.entries != null && preference.entryValues != null) {
             val checkedItems = selectedItems
-            builder!!.setMultiChoiceItems(preference.entries, checkedItems) { _, which, isChecked ->
+            builder.setMultiChoiceItems(preference.entries, checkedItems) { _, which, isChecked ->
                 preferenceChanged = true
                 if (isChecked) {
                     newValues.add(preference.entryValues[which].toString())
@@ -61,6 +60,7 @@ class MultiSelectListPreferenceDialogFragmentCompat : PreferenceDialogFragmentCo
     }
 
     override fun <T : Preference?> findPreference(key: CharSequence): T? {
+        @Suppress("UNCHECKED_CAST")
         return preference as? T
     }
 

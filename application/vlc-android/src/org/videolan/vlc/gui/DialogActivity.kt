@@ -25,9 +25,11 @@ package org.videolan.vlc.gui
 
 import android.os.Bundle
 import android.view.View
+import androidx.lifecycle.MutableLiveData
 import org.videolan.libvlc.Dialog
 import org.videolan.medialibrary.interfaces.media.MediaWrapper
-import org.videolan.resources.AppContextProvider
+import org.videolan.resources.util.parcelable
+import org.videolan.resources.util.parcelableList
 import org.videolan.vlc.R
 import org.videolan.vlc.gui.dialogs.DeviceDialog
 import org.videolan.vlc.gui.dialogs.NetworkServerDialog
@@ -36,6 +38,7 @@ import org.videolan.vlc.util.showVlcDialog
 
 class DialogActivity : BaseActivity() {
     override fun getSnackAnchorView(overAudioPlayer:Boolean): View? = findViewById<View>(android.R.id.content)
+    private var preventFinish = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +55,7 @@ class DialogActivity : BaseActivity() {
             KEY_DIALOG -> {
                 dialog?.run {
                     showVlcDialog(this)
+                    loginDialogShown.postValue(true)
                     dialog = null
                 } ?: finish()
             }
@@ -70,23 +74,37 @@ class DialogActivity : BaseActivity() {
 
     private fun setupServerDialog() {
         val networkServerDialog = NetworkServerDialog()
-        intent.getParcelableExtra<MediaWrapper>(EXTRA_MEDIA)?.let {
+        intent.parcelable<MediaWrapper>(EXTRA_MEDIA)?.let {
             networkServerDialog.setServer(it)
         }
         networkServerDialog.show(supportFragmentManager, "fragment_edit_network")
     }
 
     private fun setupSubsDialog() {
-        val medialist = intent.getParcelableArrayListExtra<MediaWrapper>(EXTRA_MEDIALIST)
+        val medialist = intent.parcelableList<MediaWrapper>(EXTRA_MEDIALIST)
         if (medialist != null)
             MediaUtils.getSubs(this, medialist)
         else
             finish()
     }
 
+    override fun finish() {
+        loginDialogShown.postValue(false)
+        if (preventFinish) {
+            preventFinish = false
+            return
+        }
+        super.finish()
+    }
+
+    fun preventFinish() {
+        preventFinish = true
+    }
+
     companion object {
 
         var dialog : Dialog? = null
+        var loginDialogShown = MutableLiveData(false)
         const val KEY_SERVER = "serverDialog"
         const val KEY_SUBS_DL = "subsdlDialog"
         const val KEY_DEVICE = "deviceDialog"

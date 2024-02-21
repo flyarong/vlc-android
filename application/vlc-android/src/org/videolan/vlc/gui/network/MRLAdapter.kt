@@ -22,6 +22,7 @@ package org.videolan.vlc.gui.network
 
 import android.net.Uri
 import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -44,7 +45,7 @@ private const val TYPE_DUMMY = 2
 
 internal class MRLAdapter(private val eventActor: SendChannel<MrlAction>, private val inCards: Boolean = false) : DiffUtilAdapter<MediaWrapper, RecyclerView.ViewHolder>() {
     private var dummyClickListener: (() -> Unit)? = null
-    private val handler by lazy(LazyThreadSafetyMode.NONE) { Handler() }
+    private val handler by lazy(LazyThreadSafetyMode.NONE) { Handler(Looper.getMainLooper()) }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
         val inflater = LayoutInflater.from(parent.context)
@@ -79,7 +80,7 @@ internal class MRLAdapter(private val eventActor: SendChannel<MrlAction>, privat
 
     override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
         super.onAttachedToRecyclerView(recyclerView)
-        if (Settings.listTitleEllipsize == 4) enableMarqueeEffect(recyclerView, handler)
+        if (Settings.listTitleEllipsize == 4) enableMarqueeEffect(recyclerView)
     }
 
     override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {

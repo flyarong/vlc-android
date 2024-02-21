@@ -28,11 +28,12 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
-import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.resources.AppContextProvider
 import org.videolan.tools.firstLetterUppercase
-import java.util.*
+import org.videolan.vlc.R
+import java.util.Locale
 
 /**
  * This is a temporary workaround to translate [IMedia.Track.language] sent by libvlc as a string to a real locale.
@@ -99,7 +100,7 @@ object LocaleUtil {
      */
     private val vlcLocaleList by lazy {
 
-        val jsonData = AppContextProvider.appContext.assets.open("vlc_locales.json").bufferedReader().use {
+        val jsonData = AppContextProvider.appResources.openRawResource(R.raw.vlc_locales).bufferedReader().use {
             it.readText()
         }
 
@@ -110,6 +111,11 @@ object LocaleUtil {
 
         jsonAdapter.fromJson(jsonData)!!
 
+    }
+
+    fun String.localeEquivalent():Array<String> = when (this.lowercase()) {
+        "in" -> arrayOf("in", "id")
+        else -> arrayOf(this)
     }
 
     /**

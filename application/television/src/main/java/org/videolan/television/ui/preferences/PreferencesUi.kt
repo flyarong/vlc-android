@@ -56,12 +56,12 @@ class PreferencesUi : BasePreferenceFragment(), SharedPreferences.OnSharedPrefer
             if (!contains(FORCE_PLAY_ALL_VIDEO)) putSingle(FORCE_PLAY_ALL_VIDEO, true)
         }
         super.onCreate(savedInstanceState)
-        findPreference<Preference>("ui_audio_category")?.isVisible = false
         tvUiPref = findPreference(PREF_TV_UI)!!
         tvUiPref.setDefaultValue(true)
         findPreference<Preference>(KEY_APP_THEME)?.isVisible = false
         findPreference<Preference>(LIST_TITLE_ELLIPSIZE)?.isVisible = false
         findPreference<Preference>(TV_FOLDERS_FIRST)?.isVisible = true
+        findPreference<Preference>(BROWSER_SHOW_HIDDEN_FILES)?.isVisible = true
         prepareLocaleList()
         currentLocale = AppContextProvider.locale
     }
@@ -80,23 +80,25 @@ class PreferencesUi : BasePreferenceFragment(), SharedPreferences.OnSharedPrefer
 
     override fun onStart() {
         super.onStart()
-        preferenceScreen.sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.registerOnSharedPreferenceChangeListener(this)
     }
 
     override fun onStop() {
         super.onStop()
-        preferenceScreen.sharedPreferences
-                .unregisterOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.unregisterOnSharedPreferenceChangeListener(this)
     }
 
-    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+        if (sharedPreferences == null || key == null) return
         when (key) {
             PREF_TV_UI -> {
                 Settings.tvUI = sharedPreferences.getBoolean(PREF_TV_UI, false)
                 (activity as PreferencesActivity).setRestartApp()
             }
+
             "browser_show_all_files" -> (activity as PreferencesActivity).setRestart()
             TV_FOLDERS_FIRST -> Settings.tvFoldersFirst = sharedPreferences.getBoolean(TV_FOLDERS_FIRST, true)
+            BROWSER_SHOW_HIDDEN_FILES -> Settings.showHiddenFiles = sharedPreferences.getBoolean(BROWSER_SHOW_HIDDEN_FILES, false)
         }
     }
 
@@ -113,22 +115,25 @@ class PreferencesUi : BasePreferenceFragment(), SharedPreferences.OnSharedPrefer
                     return true
                 }
             }
+
             SHOW_VIDEO_THUMBNAILS -> {
                 Settings.showVideoThumbs = (preference as TwoStatePreference).isChecked
                 (activity as PreferencesActivity).setRestart()
                 return true
             }
+
             KEY_SHOW_HEADERS -> {
                 Settings.showHeaders = (preference as TwoStatePreference).isChecked
                 (activity as PreferencesActivity).setRestart()
                 return true
             }
+            "media_seen" -> (activity as PreferencesActivity).setRestart()
         }
         return super.onPreferenceTreeClick(preference)
     }
 
     private fun prepareLocaleList() {
-        val localePair = LocaleUtils.getLocalesUsedInProject(activity, BuildConfig.TRANSLATION_ARRAY, getString(R.string.device_default))
+        val localePair = LocaleUtils.getLocalesUsedInProject(BuildConfig.TRANSLATION_ARRAY, getString(R.string.device_default))
         val lp = findPreference<ListPreference>("set_locale")
         lp?.entries = localePair.localeEntries
         lp?.entryValues = localePair.localeEntryValues

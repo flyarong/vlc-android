@@ -33,6 +33,7 @@ import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import org.videolan.medialibrary.interfaces.Medialibrary
+import org.videolan.medialibrary.interfaces.media.Playlist
 import org.videolan.medialibrary.interfaces.media.MediaWrapper
 import org.videolan.medialibrary.media.DummyItem
 import org.videolan.medialibrary.media.MediaLibraryItem
@@ -85,6 +86,7 @@ class MainTvModel(app: Application) : AndroidViewModel(app), Medialibrary.OnMedi
     val nowPlaying: LiveData<List<MediaLibraryItem>> = MutableLiveData()
     val videos: LiveData<List<MediaLibraryItem>> = MutableLiveData()
     val audioCategories: LiveData<List<MediaLibraryItem>> = MutableLiveData()
+    val favoritesList: LiveData<List<MediaLibraryItem>> = MutableLiveData()
     val browsers: LiveData<List<MediaLibraryItem>> = MutableLiveData()
     val history: LiveData<List<MediaWrapper>> = MutableLiveData()
     val playlist: LiveData<List<MediaLibraryItem>> = MutableLiveData()
@@ -144,7 +146,7 @@ class MainTvModel(app: Application) : AndroidViewModel(app), Medialibrary.OnMedi
 
     suspend fun updateHistory() {
         if (!showHistory) return
-        (history as MutableLiveData).value = context.getFromMl { lastMediaPlayed().toMutableList() }
+        (history as MutableLiveData).value = context.getFromMl { history(Medialibrary.HISTORY_TYPE_LOCAL).toMutableList() }
     }
 
     private fun updateVideos() = viewModelScope.launch {
@@ -157,7 +159,7 @@ class MainTvModel(app: Application) : AndroidViewModel(app), Medialibrary.OnMedi
         val allTvshows = withContext(Dispatchers.IO) { mediaMetadataRepository.getTvshowsCount() }
         val videoNb = context.getFromMl { videoCount }
         context.getFromMl {
-            getPagedVideos(Medialibrary.SORT_INSERTIONDATE, true, true, NUM_ITEMS_PREVIEW, 0)
+            getPagedVideos(Medialibrary.SORT_INSERTIONDATE, true, true, false, NUM_ITEMS_PREVIEW, 0)
         }.let {
             (videos as MutableLiveData).value = mutableListOf<MediaLibraryItem>().apply {
                 add(DummyItem(HEADER_VIDEO, context.getString(R.string.videos_all), context.resources.getQuantityString(R.plurals.videos_quantity, videoNb, videoNb)))
@@ -173,7 +175,7 @@ class MainTvModel(app: Application) : AndroidViewModel(app), Medialibrary.OnMedi
     }
 
     private fun updateRecentlyPlayed() = viewModelScope.launch {
-        val history = context.getFromMl { lastMediaPlayed().toMutableList() }
+        val history = context.getFromMl { history(Medialibrary.HISTORY_TYPE_LOCAL).toMutableList() }
         recentlyPlayed.addSource(withContext(Dispatchers.IO) { mediaMetadataRepository.getByIds(history.map { it.id }) }) {
             recentlyPlayed.value = it.sortedBy { history.indexOf(history.find { media -> media.id == it.metadata.mlId }) }
         }
@@ -202,7 +204,7 @@ class MainTvModel(app: Application) : AndroidViewModel(app), Medialibrary.OnMedi
 
     private fun updatePlaylists() = viewModelScope.launch {
         context.getFromMl {
-            getPagedPlaylists(Medialibrary.SORT_INSERTIONDATE, true, true, NUM_ITEMS_PREVIEW, 0)
+            getPagedPlaylists(Playlist.Type.All, Medialibrary.SORT_INSERTIONDATE, true, true, false, NUM_ITEMS_PREVIEW, 0)
         }.let {
             (playlist as MutableLiveData).value = mutableListOf<MediaLibraryItem>().apply {
                 add(DummyItem(HEADER_PLAYLISTS, context.getString(R.string.playlists), ""))
@@ -229,12 +231,14 @@ class MainTvModel(app: Application) : AndroidViewModel(app), Medialibrary.OnMedi
     }
 
     private suspend fun updateBrowsers() {
-        val list = mutableListOf<MediaLibraryItem>()
+        val favList = mutableListOf<MediaLibraryItem>()
         updatedFavoriteList.forEach {
             it.description = it.uri.scheme
             it.addFlags(FAVORITE_FLAG)
-            list.add(it)
+            favList.add(it)
         }
+        (favoritesList as MutableLiveData).value = favList
+        val list = mutableListOf<MediaLibraryItem>()
         val directories = DirectoryRepository.getInstance(context).getMediaDirectoriesList(context).toMutableList()
         if (!showInternalStorage && directories.isNotEmpty()) directories.removeAt(0)
         directories.forEach { if (it.location.scanAllowed()) list.add(it) }

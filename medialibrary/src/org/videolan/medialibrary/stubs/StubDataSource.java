@@ -1,5 +1,15 @@
 package org.videolan.medialibrary.stubs;
 
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_ALBUM;
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_ALPHA;
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_ARTIST;
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_DEFAULT;
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_DURATION;
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_FILENAME;
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_INSERTIONDATE;
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_LASTMODIFICATIONDATE;
+import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_RELEASEDATE;
+
 import android.os.Environment;
 import android.text.TextUtils;
 import android.util.Log;
@@ -9,7 +19,6 @@ import androidx.annotation.Nullable;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-
 import org.videolan.medialibrary.MLServiceLocator;
 import org.videolan.medialibrary.interfaces.media.Album;
 import org.videolan.medialibrary.interfaces.media.Artist;
@@ -24,16 +33,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
-
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_ALBUM;
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_ALPHA;
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_ARTIST;
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_DEFAULT;
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_DURATION;
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_FILENAME;
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_INSERTIONDATE;
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_LASTMODIFICATIONDATE;
-import static org.videolan.medialibrary.interfaces.Medialibrary.SORT_RELEASEDATE;
 
 public class StubDataSource {
 
@@ -97,7 +96,7 @@ public class StubDataSource {
             media = MLServiceLocator.getAbstractMediaWrapper(getUUID(), mrl, -1L, -1F, 18820L, MediaWrapper.TYPE_VIDEO,
                     fileName, fileName, "", "",
                     "", "", 416, 304, "", 0, -2,
-                    0, 0, 1509466228L, 0L, true, 1970, true);
+                    0, 0, 1509466228L, 0L, true, false, 1970, true, 1683711438317L);
             addVideo(media);
         }
     }
@@ -115,21 +114,21 @@ public class StubDataSource {
                     "Shine On CD2", "Peter Frampton",
                     0, 0, baseMrl + folder + ".jpg",
                     0, -2, 1, 0,
-                    1547452796L, 0L, true, 1965, true);
+                    1547452796L, 0L, true, false, 1965, true, 1683711438317L);
             addAudio(media, "", 1965, 400, mrl);
         }
     }
 
     public Folder createFolder(String name) {
-        Folder folder = MLServiceLocator.getAbstractFolder(getUUID(), name, baseMrl + name, 1);
+        Folder folder = MLServiceLocator.getAbstractFolder(getUUID(), name, baseMrl + name, 1, false);
         mFolders.add(folder);
         return folder;
     }
 
     public void init() {
-        Artist artist = MLServiceLocator.getAbstractArtist(1L, "", "", "", "", 0, 0, 0);
+        Artist artist = MLServiceLocator.getAbstractArtist(1L, "", "", "", "", 0, 0, 0, false);
         addArtistSecure(artist);
-        artist = MLServiceLocator.getAbstractArtist(2L, "", "", "", "", 0, 0, 0);
+        artist = MLServiceLocator.getAbstractArtist(2L, "", "", "", "", 0, 0, 0, false);
         addArtistSecure(artist);
     }
 
@@ -410,8 +409,10 @@ public class StubDataSource {
                     jsonObject.getLong("last_modified"),
                     0L,
                     true,
+                    false,
                     jsonObject.getInt("release_date"),
-                    true
+                    true,
+                    1683711438317L
             );
             if (type == MediaWrapper.TYPE_VIDEO) {
                 addVideo(media);
@@ -495,7 +496,8 @@ public class StubDataSource {
                         artist.getId(),
                         album.getTracksCount(),
                         album.getPresentTracksCount(),
-                        album.getDuration() + duration));
+                        album.getDuration() + duration,
+                        album.isFavorite()));
                 break;
             }
         }
@@ -522,7 +524,7 @@ public class StubDataSource {
         Artist albumArtist = getArtistFromName(albumArtistName);
         if (albumArtist == null) {
             albumArtist = MLServiceLocator.getAbstractArtist(getUUID(), albumArtistName,
-                    "", media.getArtworkMrl(), "", 0, trackTotal, trackTotal);
+                    "", media.getArtworkMrl(), "", 0, trackTotal, trackTotal, false);
             addArtistSecure(albumArtist);
         }
         if (media.getArtist().isEmpty()) {
@@ -531,7 +533,7 @@ public class StubDataSource {
             Artist artist = getArtistFromName(media.getArtist());
             if (artist == null) {
                 artist = MLServiceLocator.getAbstractArtist(getUUID(), media.getArtist(),
-                        "", media.getArtworkMrl(), "", 1, trackTotal, trackTotal);
+                        "", media.getArtworkMrl(), "", 1, trackTotal, trackTotal, false);
                 addArtistSecure(artist);
             }
         }
@@ -540,11 +542,11 @@ public class StubDataSource {
         if (album == null) {
             album = MLServiceLocator.getAbstractAlbum(getUUID(), albumName, releaseYear,
                     media.getArtworkMrl(), albumArtist.getTitle(),
-                    albumArtist.getId(), trackTotal, trackTotal, 0);
+                    albumArtist.getId(), trackTotal, trackTotal, 0, false);
             addAlbumSecure(album);
         }
         raiseAlbumDuration(album, (int) media.getLength());
-        Genre genre = MLServiceLocator.getAbstractGenre(getUUID(), media.getGenre());
+        Genre genre = MLServiceLocator.getAbstractGenre(getUUID(), media.getGenre(), false);
         addGenreSecure(genre);
         MediaWrapper newMedia = MLServiceLocator.getAbstractMediaWrapper(
                 media.getId(),
@@ -569,8 +571,10 @@ public class StubDataSource {
                 media.getLastModified(),
                 0L,
                 true,
+                false,
                 releaseYear,
-                true
+                true,
+                1683711438317L
         );
         mAudioMediaWrappers.add(newMedia);
     }
@@ -583,7 +587,7 @@ public class StubDataSource {
     public MediaWrapper addMediaWrapper(String mrl, String title, int type) {
         MediaWrapper media = MLServiceLocator.getAbstractMediaWrapper(getUUID(), mrl, -1L, -1F, 280224L, type,
                 title, title, "Artisto", "Jazz", "XYZ CD1", "", 0, 0, baseMrl + title, -2,
-                1, 1, 0, 1547452796L, 0L, true, 0, true);
+                1, 1, 0, 1547452796L, 0L, true, false, 0, true, 1683711438317L);
         if (type == MediaWrapper.TYPE_ALL) type = media.getType();
         if (type == MediaWrapper.TYPE_VIDEO) addVideo(media);
         else if (type == MediaWrapper.TYPE_AUDIO) addAudio(media, "", 2018, 12313, mrl);
@@ -614,7 +618,7 @@ public class StubDataSource {
             ArrayList<String> mlFolders = new ArrayList<>(Arrays.asList(getFoldersString()));
             if (!mlFolders.contains(mrl)) {
                 final String name = folderArray[folderArray.length - 1];
-                mFolders.add(MLServiceLocator.getAbstractFolder(getUUID(), name, mrl, 1));
+                mFolders.add(MLServiceLocator.getAbstractFolder(getUUID(), name, mrl, 1, false));
             }
         }
     }

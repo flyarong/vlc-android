@@ -17,7 +17,7 @@ public abstract class Playlist extends MediaLibraryItem {
     protected long mNbUnknown;
     protected long mNbDurationUnknown;
 
-    protected Playlist(long id, String name, int trackCount, long duration, int nbVideo, int nbAudio, int nbUnknown, int nbDurationUnknown) {
+    protected Playlist(long id, String name, int trackCount, long duration, int nbVideo, int nbAudio, int nbUnknown, int nbDurationUnknown, boolean isFavorite) {
         super(id, name);
         mTracksCount = trackCount;
         mDuration = duration;
@@ -25,11 +25,25 @@ public abstract class Playlist extends MediaLibraryItem {
         mNbAudio = nbAudio;
         mNbUnknown = nbUnknown;
         mNbDurationUnknown = nbDurationUnknown;
+        mFavorite = isFavorite;
     }
 
-    abstract public MediaWrapper[] getTracks(boolean includeMissing);
-    abstract public MediaWrapper[] getPagedTracks(int nbItems, int offset, boolean includeMissing);
-    abstract public int getRealTracksCount(boolean includeMissing);
+    public enum Type {
+        /// Include all kind of playlist, regarding of the media types
+        All,
+        /// Include playlists containing at least one audio track
+        Audio,
+        /// Include playlists containing at least one video or one unknown track
+        Video,
+        /// Include playlists containing audio tracks only
+        AudioOnly,
+        /// Include playlists containing video tracks only
+        VideoOnly
+    }
+
+    abstract public MediaWrapper[] getTracks(boolean includeMissing, boolean onlyFavorites);
+    abstract public MediaWrapper[] getPagedTracks(int nbItems, int offset, boolean includeMissing, boolean onlyFavorites);
+    abstract public int getRealTracksCount(boolean includeMissing, boolean onlyFavorites);
     abstract public boolean append(long mediaId);
     abstract public boolean append(long[] mediaIds);
     abstract public boolean append(List<Long> mediaIds);
@@ -37,12 +51,17 @@ public abstract class Playlist extends MediaLibraryItem {
     abstract public boolean move(int oldPosition, int newPosition);
     abstract public boolean remove(int position);
     abstract public boolean delete();
-    abstract public MediaWrapper[] searchTracks(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public MediaWrapper[] searchTracks(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int searchTracksCount(String query);
 
     @Override
     public int getTracksCount() {
         return mTracksCount;
+    }
+
+    @Override
+    public boolean setFavorite(boolean favorite) {
+        return false;
     }
 
     public long getDuration() {
@@ -87,10 +106,12 @@ public abstract class Playlist extends MediaLibraryItem {
     public void writeToParcel(Parcel parcel, int i) {
         super.writeToParcel(parcel, i);
         parcel.writeInt(mTracksCount);
+        parcel.writeInt(mFavorite ? 1 : 0);
     }
 
     public Playlist(Parcel in) {
         super(in);
         this.mTracksCount = in.readInt();
+        this.mFavorite = in.readInt() == 1;
     }
 }

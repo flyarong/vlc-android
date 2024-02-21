@@ -35,12 +35,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.videolan.libvlc.Dialog
 import org.videolan.medialibrary.interfaces.media.MediaWrapper
-import org.videolan.resources.CTX_FAV_ADD
 import org.videolan.tools.NetworkMonitor
 import org.videolan.vlc.R
 import org.videolan.vlc.gui.SecondaryActivity
 import org.videolan.vlc.gui.helpers.MedialibraryUtils
 import org.videolan.vlc.gui.view.EmptyLoadingState
+import org.videolan.vlc.util.ContextOption
+import org.videolan.vlc.util.ContextOption.*
 import org.videolan.vlc.util.DialogDelegate
 import org.videolan.vlc.util.IDialogManager
 import org.videolan.vlc.util.showVlcDialog
@@ -62,11 +63,11 @@ class NetworkBrowserFragment : BaseBrowserFragment(), IDialogManager {
         dialogsDelegate.observeDialogs(this, this)
         networkMonitor = NetworkMonitor.getInstance(requireContext())
         (requireActivity() as? SecondaryActivity)?.supportActionBar?.setHomeAsUpIndicator(R.drawable.ic_close_up)
+        viewModel = getBrowserModel(TYPE_NETWORK, mrl)
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        viewModel = getBrowserModel(TYPE_NETWORK, mrl)
         if (isRootDirectory) swipeRefreshLayout.isEnabled = false
     }
 
@@ -87,7 +88,7 @@ class NetworkBrowserFragment : BaseBrowserFragment(), IDialogManager {
         item.isVisible = !isRootDirectory
         lifecycleScope.launchWhenStarted {
             val isFavorite = mrl != null && browserFavRepository.browserFavExists(mrl!!.toUri())
-            item.setIcon(if (isFavorite) R.drawable.ic_menu_bookmark_w else R.drawable.ic_menu_bookmark_outline_w)
+            item.setIcon(if (isFavorite) R.drawable.ic_am_favorite else R.drawable.ic_am_favorite_outline)
             item.setTitle(if (isFavorite) R.string.favorites_remove else R.string.favorites_add)
             mrl?.let {
                 val isScanned = withContext(Dispatchers.IO) { MedialibraryUtils.isScanned(it) }
@@ -127,7 +128,7 @@ class NetworkBrowserFragment : BaseBrowserFragment(), IDialogManager {
         }
     }
 
-    override fun onCtxAction(position: Int, option: Long) {
+    override fun onCtxAction(position: Int, option: ContextOption) {
         val mw = this.adapter.getItem(position) as MediaWrapper
         when (option) {
             CTX_FAV_ADD -> lifecycleScope.launch { browserFavRepository.addNetworkFavItem(mw.uri, mw.title, mw.artworkURL) }
@@ -165,7 +166,7 @@ class NetworkBrowserFragment : BaseBrowserFragment(), IDialogManager {
                         binding.emptyLoading.emptyText = getString(R.string.network_empty)
                     }
                     binding.networkList.visibility = View.GONE
-                    handler.sendEmptyMessage(MSG_HIDE_LOADING)
+                    scheduler.startAction(MSG_HIDE_LOADING)
                 }
             } else {
                 binding.emptyLoading.state = EmptyLoadingState.NONE

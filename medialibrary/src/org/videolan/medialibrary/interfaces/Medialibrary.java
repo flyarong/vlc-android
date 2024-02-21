@@ -34,14 +34,15 @@ import androidx.core.content.ContextCompat;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MutableLiveData;
 
+import org.videolan.medialibrary.EventTools;
 import org.videolan.medialibrary.MLServiceLocator;
-import org.videolan.medialibrary.SingleEvent;
 import org.videolan.medialibrary.Tools;
 import org.videolan.medialibrary.interfaces.media.Album;
 import org.videolan.medialibrary.interfaces.media.Artist;
 import org.videolan.medialibrary.interfaces.media.Folder;
 import org.videolan.medialibrary.interfaces.media.Genre;
 import org.videolan.medialibrary.interfaces.media.MediaWrapper;
+import org.videolan.medialibrary.interfaces.media.MlService;
 import org.videolan.medialibrary.interfaces.media.Playlist;
 import org.videolan.medialibrary.interfaces.media.VideoGroup;
 import org.videolan.medialibrary.media.SearchAggregate;
@@ -93,6 +94,10 @@ abstract public class Medialibrary {
     public static final int ML_SET_TIME_AS_IS = 2;
     public static final int ML_SET_TIME_END = 3;
 
+    public static final int HISTORY_TYPE_GLOBAL = 0;
+    public static final int HISTORY_TYPE_LOCAL = 1;
+    public static final int HISTORY_TYPE_NETWORK = 2;
+
     public static final MediaWrapper[] EMPTY_COLLECTION = {};
     public static final String VLC_MEDIA_DB_NAME = "/vlc_media.db";
     public static final String THUMBS_FOLDER_NAME = "/thumbs";
@@ -109,20 +114,15 @@ abstract public class Medialibrary {
     protected final List<PlaylistsCb> mPlaylistCbs = new ArrayList<>();
     protected final List<HistoryCb> mHistoryCbs = new ArrayList<>();
     protected final List<MediaGroupCb> mMediaGroupCbs = new ArrayList<>();
+    protected final List<FoldersCb> mFoldersCbs = new ArrayList<>();
     protected final List<OnMedialibraryReadyListener> onMedialibraryReadyListeners = new ArrayList<>();
     protected final List<OnDeviceChangeListener> onDeviceChangeListeners = new ArrayList<>();
     protected volatile boolean isMedialibraryStarted = false;
     protected final List<DevicesDiscoveryCb> devicesDiscoveryCbList = new ArrayList<>();
     protected final List<EntryPointsEventsCb> entryPointsEventsCbList = new ArrayList<>();
     private MedialibraryExceptionHandler mExceptionHandler;
-    protected static Context sContext;
-    public static final LiveData<MediaWrapper> lastThumb = new SingleEvent<>();
 
     protected static final Medialibrary instance = MLServiceLocator.getAbstractMedialibrary();
-
-    public static Context getContext() {
-        return sContext;
-    }
 
     public static LiveData<Boolean> getState() {
         return sRunning;
@@ -240,6 +240,12 @@ abstract public class Medialibrary {
         void onMediaGroupsAdded();
         void onMediaGroupsModified();
         void onMediaGroupsDeleted();
+    }
+
+    public interface FoldersCb {
+        void onFoldersAdded();
+        void onFoldersModified();
+        void onFoldersDeleted();
     }
 
     public interface OnMedialibraryReadyListener {
@@ -425,6 +431,27 @@ abstract public class Medialibrary {
         }
     }
 
+    @SuppressWarnings("unused")
+    public void onFoldersAdded() {
+        synchronized (mFoldersCbs) {
+            for (FoldersCb cb : mFoldersCbs) cb.onFoldersAdded();
+        }
+    }
+
+    @SuppressWarnings("unused")
+    public void onFoldersModified() {
+        synchronized (mFoldersCbs) {
+            for (FoldersCb cb : mFoldersCbs) cb.onFoldersModified();
+        }
+    }
+
+    @SuppressWarnings("unused")
+    public void onFoldersDeleted() {
+        synchronized (mFoldersCbs) {
+            for (FoldersCb cb : mFoldersCbs) cb.onFoldersDeleted();
+        }
+    }
+
     public void onDiscoveryStarted() {
         synchronized (devicesDiscoveryCbList) {
             if (!devicesDiscoveryCbList.isEmpty())
@@ -558,7 +585,7 @@ abstract public class Medialibrary {
     //    public static LiveData<MediaWrapper> lastThumb = new SingleEvent<>();
     @SuppressWarnings({"unused", "unchecked"})
     public void onMediaThumbnailReady(MediaWrapper media, boolean success) {
-        if (success) ((MutableLiveData<MediaWrapper>)lastThumb).postValue(media);
+        if (success) ((MutableLiveData<MediaWrapper>) EventTools.getInstance().lastThumb).postValue(media);
     }
 
     public void addMediaCb(MediaCb mediaUpdatedCb) {
@@ -645,6 +672,18 @@ abstract public class Medialibrary {
         }
     }
 
+    public void addFoldersCb(FoldersCb foldersCb) {
+        synchronized (mFoldersCbs) {
+            this.mFoldersCbs.add(foldersCb);
+        }
+    }
+
+    public void removeFoldersCb(FoldersCb foldersCb) {
+        synchronized (mFoldersCbs) {
+            this.mFoldersCbs.remove(foldersCb);
+        }
+    }
+
     public void addDeviceDiscoveryCb(DevicesDiscoveryCb cb) {
         synchronized (devicesDiscoveryCbList) {
             if (!devicesDiscoveryCbList.contains(cb))
@@ -714,16 +753,16 @@ abstract public class Medialibrary {
     abstract public String[] getFoldersList();
     abstract public boolean removeDevice(String uuid, String path);
     abstract public MediaWrapper[] getVideos();
-    abstract public MediaWrapper[] getPagedVideos(int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
-    abstract public MediaWrapper[] getVideos(int sort, boolean desc, boolean includeMissing);
+    abstract public MediaWrapper[] getPagedVideos(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
+    abstract public MediaWrapper[] getVideos(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites);
     abstract public MediaWrapper[] getRecentVideos();
     abstract public MediaWrapper[] getAudio();
-    abstract public MediaWrapper[] getAudio(int sort, boolean desc, boolean includeMissing);
-    abstract public MediaWrapper[] getPagedAudio(int sort, boolean desc, boolean includeMissing, int nbitems, int offset);
+    abstract public MediaWrapper[] getAudio(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites);
+    abstract public MediaWrapper[] getPagedAudio(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbitems, int offset);
     abstract public MediaWrapper[] getRecentAudio();
     abstract public int getVideoCount();
     abstract public int getAudioCount();
-    abstract public VideoGroup[] getVideoGroups(int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public VideoGroup[] getVideoGroups(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getVideoGroupsCount(@Nullable String query);
     abstract public void setVideoGroupsPrefixLength(int lenght);
 
@@ -734,40 +773,39 @@ abstract public class Medialibrary {
     abstract public boolean regroupAll();
 
     abstract public boolean regroup(long mediaId);
-    abstract public Album[] getAlbums(boolean includeMissing);
-    abstract public Album[] getAlbums(int sort, boolean desc, boolean includeMissing);
-    abstract public Album[] getPagedAlbums(int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public Album[] getAlbums(boolean includeMissing, boolean onlyFavorites);
+    abstract public Album[] getAlbums(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites);
+    abstract public Album[] getPagedAlbums(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getAlbumsCount();
     abstract public int getAlbumsCount(String query);
     abstract public Album getAlbum(long albumId);
-    abstract public Artist[] getArtists(boolean all, boolean includeMissing);
-    abstract public Artist[] getArtists(boolean all, int sort, boolean desc, boolean includeMissing);
-    abstract public Artist[] getPagedArtists(boolean all, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public Artist[] getArtists(boolean all, boolean includeMissing, boolean onlyFavorites);
+    abstract public Artist[] getArtists(boolean all, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites);
+    abstract public Artist[] getPagedArtists(boolean all, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getArtistsCount(boolean all);
     abstract public int getArtistsCount(String query);
     abstract public Artist getArtist(long artistId);
-    abstract public Genre[] getGenres(boolean includeMissing);
-    abstract public Genre[] getGenres(int sort, boolean desc, boolean includeMissing);
-    abstract public Genre[] getPagedGenres(int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public Genre[] getGenres(boolean includeMissing, boolean onlyFavorites);
+    abstract public Genre[] getGenres(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites);
+    abstract public Genre[] getPagedGenres(int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getGenresCount();
     abstract public int getGenresCount(String query);
     abstract public Genre getGenre(long genreId);
-    abstract public Playlist[] getPlaylists(int sort, boolean desc, boolean includeMissing);
-    abstract public Playlist[] getPlaylists();
-    abstract public Playlist[] getPagedPlaylists(int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public Playlist[] getPlaylists(Playlist.Type type, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites);
+    abstract public Playlist[] getPlaylists(Playlist.Type type, boolean onlyFavorites);
+    abstract public Playlist[] getPagedPlaylists(Playlist.Type type, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getPlaylistsCount();
     abstract public int getPlaylistsCount(String query);
-    abstract public Playlist getPlaylist(long playlistId, boolean includeMissing);
-    abstract public Playlist createPlaylist(String name, boolean includeMissing);
+    abstract public Playlist getPlaylist(long playlistId, boolean includeMissing, boolean onlyFavorites);
+    abstract public Playlist createPlaylist(String name, boolean includeMissing, boolean onlyFavorites);
     abstract public void pauseBackgroundOperations();
     abstract public void resumeBackgroundOperations();
     abstract public void reload();
     abstract public void reload(String entrypoint);
     abstract public void forceParserRetry();
     abstract public void forceRescan();
-    abstract public MediaWrapper[] lastMediaPlayed();
-    abstract public MediaWrapper[] lastStreamsPlayed();
-    abstract public boolean clearHistory();
+    abstract public MediaWrapper[] history(int type);
+    abstract public boolean clearHistory(int type);
     abstract public void clearDatabase(boolean restorePlaylist);
     abstract public boolean addToHistory(String mrl, String title);
     abstract public MediaWrapper getMedia(long id);
@@ -777,27 +815,38 @@ abstract public class Medialibrary {
     abstract public boolean removeExternalMedia(long id);
     abstract public boolean flushUserProvidedThumbnails();
     abstract public MediaWrapper addStream(String mrl, String title);
-    abstract public Folder[] getFolders(int type, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public Folder[] getFolders(int type, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getFoldersCount(int type);
     abstract public int setLastTime(long mediaId, long time);
     abstract public boolean setLastPosition(long mediaId, float position);
-    abstract public SearchAggregate search(String query, boolean includeMissing);
+    abstract public SearchAggregate search(String query, boolean includeMissing, boolean onlyFavorites);
     abstract public MediaWrapper[] searchMedia(String query);
-    abstract public MediaWrapper[] searchMedia(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public MediaWrapper[] searchMedia(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getMediaCount(String query);
-    abstract public MediaWrapper[] searchAudio(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public MediaWrapper[] searchAudio(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getAudioCount(String query);
-    abstract public MediaWrapper[] searchVideo(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public MediaWrapper[] searchVideo(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getVideoCount(String query);
     abstract public Artist[] searchArtist(String query);
-    abstract public Artist[] searchArtist(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public Artist[] searchArtist(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public Album[] searchAlbum(String query);
-    abstract public Album[] searchAlbum(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public Album[] searchAlbum(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public Genre[] searchGenre(String query);
-    abstract public Genre[] searchGenre(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
-    abstract public Playlist[] searchPlaylist(String query, boolean includeMissing);
-    abstract public Playlist[] searchPlaylist(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
-    abstract public Folder[] searchFolders(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public Genre[] searchGenre(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
+    abstract public Playlist[] searchPlaylist(String query, Playlist.Type type, boolean includeMissing, boolean onlyFavorites);
+    abstract public Playlist[] searchPlaylist(String query, Playlist.Type type, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
+    abstract public Folder[] searchFolders(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
     abstract public int getFoldersCount(String query);
-    abstract public VideoGroup[] searchVideoGroups(String query, int sort, boolean desc, boolean includeMissing, int nbItems, int offset);
+    abstract public VideoGroup[] searchVideoGroups(String query, int sort, boolean desc, boolean includeMissing, boolean onlyFavorites, int nbItems, int offset);
+
+    abstract public MlService getService(MlService.Type type);
+    abstract public boolean fitsInSubscriptionCache(MediaWrapper media);
+    abstract public void cacheNewSubscriptionMedia();
+    abstract public boolean setSubscriptionMaxCachedMedia(int nbMedia);
+    abstract public boolean setSubscriptionMaxCacheSize(long size);
+    abstract public boolean setGlobalSubscriptionMaxCacheSize(long size);
+    abstract public int getSubscriptionMaxCachedMedia();
+    abstract public long getSubscriptionMaxCacheSize();
+    abstract public long getGlobalSubscriptionMaxCacheSize();
+    abstract public boolean refreshAllSubscriptions();
 }

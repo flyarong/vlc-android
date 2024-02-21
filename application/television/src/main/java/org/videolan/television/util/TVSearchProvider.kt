@@ -47,7 +47,7 @@ import org.videolan.vlc.BuildConfig
 import org.videolan.vlc.R
 import org.videolan.vlc.getFileUri
 import org.videolan.vlc.util.ThumbnailsProvider
-import java.util.*
+import java.util.Locale
 
 class TVSearchProvider : ContentProvider() {
     override fun insert(uri: Uri, values: ContentValues?): Uri? =
@@ -101,10 +101,11 @@ class TVSearchProvider : ContentProvider() {
                                         }
                                     }
                                 }
+                        else { }
                     }
                 }
 
-                val searchAggregate = medialibrary.search(sanitizedQuery, Settings.includeMissing)
+                val searchAggregate = medialibrary.search(sanitizedQuery, Settings.includeMissing, false)
                         ?: return null
                 searchAggregate.artists?.filterNotNull()?.let {
                     it.forEach { media ->
@@ -162,7 +163,7 @@ private fun MediaWrapper.getThumb(): Uri {
     if (!isThumbnailGenerated) {
         ThumbnailsProvider.getVideoThumbnail(this@getThumb, 512)
     }
-    val resourceUri = "android.resource://${BuildConfig.APP_ID}/${R.drawable.ic_browser_video_big_normal}".toUri()
+    val resourceUri = "android.resource://${BuildConfig.APP_ID}/${R.drawable.ic_video_big}".toUri()
     val mrl = artworkMrl ?: return resourceUri
     return try {
         getFileUri(mrl)

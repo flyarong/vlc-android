@@ -26,17 +26,30 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
 import android.text.format.Formatter
+import android.util.Log
 import androidx.collection.SimpleArrayMap
 import androidx.lifecycle.MutableLiveData
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CompletionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ObsoleteCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.MediaBrowser
 import org.videolan.libvlc.util.MediaBrowser.EventListener
@@ -53,7 +66,18 @@ import org.videolan.tools.DependencyProvider
 import org.videolan.tools.Settings
 import org.videolan.tools.livedata.LiveDataset
 import org.videolan.vlc.R
-import org.videolan.vlc.util.*
+import org.videolan.vlc.util.ModelsHelper
+import org.videolan.vlc.util.TextUtils
+import org.videolan.vlc.util.ascComp
+import org.videolan.vlc.util.descComp
+import org.videolan.vlc.util.fileReplacementMarker
+import org.videolan.vlc.util.folderReplacementMarker
+import org.videolan.vlc.util.getFilenameAscComp
+import org.videolan.vlc.util.getFilenameDescComp
+import org.videolan.vlc.util.getTvAscComp
+import org.videolan.vlc.util.getTvDescComp
+import org.videolan.vlc.util.isBrowserMedia
+import org.videolan.vlc.util.isMedia
 import java.io.File
 
 const val TAG = "VLC/BrowserProvider"
@@ -82,14 +106,14 @@ abstract class BrowserProvider(val context: Context, val dataset: LiveDataset<Me
         (sort == Medialibrary.SORT_FILENAME || sort == Medialibrary.SORT_DEFAULT) && desc -> true
         else -> true
     }
-    fun getComparator(nbOfDigits: Int): Comparator<MediaLibraryItem>? = when {
+    fun getComparator(): Comparator<MediaLibraryItem>? = when {
             Settings.showTvUi && sort in arrayOf(Medialibrary.SORT_ALPHA, Medialibrary.SORT_DEFAULT, Medialibrary.SORT_FILENAME) && desc -> getTvDescComp(Settings.tvFoldersFirst)
             Settings.showTvUi && sort in arrayOf(Medialibrary.SORT_ALPHA, Medialibrary.SORT_DEFAULT, Medialibrary.SORT_FILENAME) && !desc -> getTvAscComp(Settings.tvFoldersFirst)
             url != null && Uri.parse(url)?.scheme == "upnp" -> null
             sort == Medialibrary.SORT_ALPHA && desc -> descComp
             sort == Medialibrary.SORT_ALPHA && !desc -> ascComp
-            (sort == Medialibrary.SORT_FILENAME || sort == Medialibrary.SORT_DEFAULT) && desc -> getFilenameDescComp(nbOfDigits)
-            else -> getFilenameAscComp(nbOfDigits)
+            (sort == Medialibrary.SORT_FILENAME || sort == Medialibrary.SORT_DEFAULT) && desc -> getFilenameDescComp()
+            else -> getFilenameAscComp()
         }
 
     init {
@@ -185,7 +209,7 @@ abstract class BrowserProvider(val context: Context, val dataset: LiveDataset<Me
      * @param files the files to sort
      */
     fun sort(files: MutableList<MediaLibraryItem>) {
-        getComparator(if (isComparatorAboutFilename())  files.determineMaxNbOfDigits() else 0)?.let { files.apply { this.sortWith(it) } } ?: if (desc) files.apply { reverse() }
+        getComparator()?.let { files.apply { this.sortWith(it) } } ?: if (desc) files.apply { reverse() } else { }
     }
 
     suspend fun browseUrl(url: String): List<MediaLibraryItem> {
@@ -239,7 +263,7 @@ abstract class BrowserProvider(val context: Context, val dataset: LiveDataset<Me
     }.buffer(Channel.UNLIMITED)
 
     open fun addMedia(media: MediaLibraryItem) {
-        getComparator(if (isComparatorAboutFilename())  dataset.value.determineMaxNbOfDigits() else 0)?.let { dataset.add(media, it) } ?: dataset.add(media)
+        getComparator()?.let { dataset.add(media, it) } ?: dataset.add(media)
     }
 
     open fun refresh() {
@@ -322,8 +346,9 @@ abstract class BrowserProvider(val context: Context, val dataset: LiveDataset<Me
                             descriptionUpdate.value = Pair(position, it)
                         }
                         directories.addAll(files)
+                        @Suppress("UNCHECKED_CAST")
                         sort(directories as MutableList<MediaLibraryItem>)
-                        withContext(coroutineContextProvider.Main) { foldersContentMap.put(item, directories) }
+                        withContext(coroutineContextProvider.Main) { foldersContentMap.put(item, directories.toMutableList()) }
                     }
                     directories.clear()
                     files.clear()
@@ -353,7 +378,12 @@ abstract class BrowserProvider(val context: Context, val dataset: LiveDataset<Me
     }
 
     protected open suspend fun findMedia(media: IMedia): MediaLibraryItem? {
-        val mw: MediaWrapper = MLServiceLocator.getAbstractMediaWrapper(media)
+        val mw: MediaWrapper = try {
+            MLServiceLocator.getAbstractMediaWrapper(media)
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to generate the media wrapper. It usually happen when the IMedia fields have some encoding issues", e)
+            return null
+        }
         media.release()
         if (!mw.isMedia()) {
             if (showAll || mw.isBrowserMedia()) return mw

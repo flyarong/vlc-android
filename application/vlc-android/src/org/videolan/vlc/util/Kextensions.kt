@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.res.Resources
+import android.icu.text.Transliterator
 import android.net.Uri
 import android.os.Build
 import android.text.Spannable
@@ -14,6 +15,7 @@ import android.text.style.DynamicDrawableSpan
 import android.text.style.ImageSpan
 import android.util.DisplayMetrics
 import android.view.View
+import android.view.ViewGroup.MarginLayoutParams
 import android.widget.TextView
 import androidx.annotation.WorkerThread
 import androidx.appcompat.app.AppCompatActivity
@@ -26,8 +28,10 @@ import androidx.core.widget.TextViewCompat
 import androidx.databinding.BindingAdapter
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
+import androidx.fragment.app.FragmentManager
 import androidx.lifecycle.*
 import androidx.recyclerview.widget.RecyclerView
+import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
@@ -57,6 +61,7 @@ import java.lang.ref.WeakReference
 import java.net.URI
 import java.net.URISyntaxException
 import java.security.SecureRandom
+import java.text.Normalizer
 import java.util.*
 import kotlin.math.max
 import kotlin.math.min
@@ -96,6 +101,16 @@ fun FragmentActivity.share(file: File) {
         intentShareFile.putExtra(Intent.EXTRA_SUBJECT, file.name)
         intentShareFile.putExtra(Intent.EXTRA_TEXT, getString(R.string.share_message, file.name))
         startActivity(Intent.createChooser(intentShareFile, getString(R.string.share_file,file.name)))
+    }
+}
+
+fun FragmentActivity.share(title:String, content: String) {
+    val intentShareFile = Intent(Intent.ACTION_SEND)
+    if (isStarted()) {
+        intentShareFile.type = "*/*"
+        intentShareFile.putExtra(Intent.EXTRA_SUBJECT, title)
+        intentShareFile.putExtra(Intent.EXTRA_TEXT, content)
+        startActivity(Intent.createChooser(intentShareFile, getString(R.string.share_file,title)))
     }
 }
 
@@ -208,6 +223,13 @@ fun asyncTextItem(view: TextView, item: MediaLibraryItem?) {
     setTextAsync(view, text, params)
 }
 
+@BindingAdapter("layoutMarginTop")
+fun setLayoutMarginTop(view: View, dimen: Int) {
+    val layoutParams = view.layoutParams as MarginLayoutParams
+    layoutParams.topMargin = dimen
+    view.layoutParams = layoutParams
+}
+
 private fun setTextAsync(view: TextView, text: CharSequence, params: PrecomputedTextCompat.Params) {
     val ref = WeakReference(view)
     AppScope.launch(Dispatchers.Default) {
@@ -262,6 +284,24 @@ fun CharSequence?.getFilesNumber():Int {
     if (!contains(fileReplacementMarker)) return 0
     val cutString = replace(Regex("[^0-9 ]"), "").trim().split(" ")
     return cutString[cutString.size -1].toInt()
+}
+
+/**
+ * Slugify a string. Use the Unicode Transliterator to convert
+ * non-ASCII characters into a latin representation.
+ *
+ * @param replacement the replacement char
+ * @return the slugified string
+ */
+fun String.slugify(replacement: String = "-"): String {
+    val s = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // NFD is included in Latin-ASCII
+        Transliterator.getInstance("Any-Latin; Lower; Latin-ASCII").transliterate(this)
+    } else {
+        Normalizer.normalize(this, Normalizer.Form.NFD)
+    }
+    return s.replace("[^a-zA-Z0-9\\s]+".toRegex(), "").trim()
+            .replace("\\s+".toRegex(), replacement)
 }
 
 const val presentReplacementMarker = "§*§"
@@ -373,12 +413,13 @@ fun generateResolutionClass(width: Int, height: Int): String? = if (width <= 0 |
     null
 } else {
     val realHeight = min(height, width)
+    val realWidth = max(height, width)
     when {
-        realHeight >= 4320 -> "8K"
-        realHeight >= 2160 -> "4K"
-        realHeight >= 1440 -> "qHD"
-        realHeight >= 1080 -> "FHD"
-        realHeight >= 720 -> "HD"
+        realHeight >= 4320 || realWidth >= 4320.0 * (16.0 / 9.0) -> "8K"
+        realHeight >= 2160 || realWidth >= 2160.0 * (16.0 / 9.0) -> "4K"
+        realHeight >= 1440 || realWidth >= 1440.0 * (16.0 / 9.0) -> "1440p"
+        realHeight >= 1080 || realWidth >= 1080.0 * (16.0 / 9.0) -> "1080p"
+        realHeight >= 720 || realWidth >= 720.0 * (16.0 / 9.0) -> "720p"
         else -> "SD"
     }
 }
@@ -394,72 +435,6 @@ fun <T> Flow<T>.launchWhenStarted(scope: LifecycleCoroutineScope): Job = scope.l
     collect() // tail-call
 }
 
-/**
- * Sanitize a string by adding enough "0" at the start
- * to make a "natural" alphanumeric comparison (1, 2, 10, 11, 20) instead of a strict one (1, 10, 11, 21, 20)
- *
- * @param nbOfDigits the number of digits to reach
- * @return a string having exactly [nbOfDigits] digits at the start
- */
-fun String?.sanitizeStringForAlphaCompare(nbOfDigits: Int): String? {
-    if (this == null) return null
-    if (first().isDigit()) return buildString {
-        var numberOfPrependingZeros =0
-        for (c in this@sanitizeStringForAlphaCompare) {
-            if (c.isDigit() && c.digitToInt() == 0) numberOfPrependingZeros++ else break
-        }
-        for (i in 0 until (nbOfDigits - numberOfPrependingZeros - (getStartingNumber()?.numberOfDigits() ?: 0))) {
-            append("0")
-        }
-        append(this@sanitizeStringForAlphaCompare)
-    }
-    return this
-}
-
-/**
- * Calculate the number of digits of an Int
- *
- * @return the number of digits of this Int
- */
-fun Int.numberOfDigits(): Int = when (this) {
-    in -9..9 -> 1
-    else -> 1 + (this / 10).numberOfDigits()
-}
-
-/**
- * Get the number described at the start of this String if any
- *
- * @return the starting number of this String, null if no number found
- */
-fun String.getStartingNumber(): Int? {
-    return try {
-        buildString {
-            for (c in this@getStartingNumber)
-                //we exclude starting "0" to prevent bad sorts
-                if (c.isDigit()) {
-                    if (!(this.isEmpty() && c.digitToInt() == 0)) append(c)
-                } else break
-        }.toInt()
-    } catch (e: NumberFormatException) {
-        null
-    }
-}
-
-/**
- * Determine the max number of digits iat the start of
- * this lit items' filename
- *
- * @return a max number of digits
- */
-fun List<MediaLibraryItem>.determineMaxNbOfDigits(): Int {
-    var numberOfPrepending = 0
-    forEach {
-        numberOfPrepending = max((it as? MediaWrapper)?.fileName?.getStartingNumber()?.numberOfDigits()
-                ?: 0, numberOfPrepending)
-    }
-    return numberOfPrepending
-}
-
 fun Fragment.showParentFolder(media: MediaWrapper) {
     val parent = MLServiceLocator.getAbstractMediaWrapper(media.uri.retrieveParent()).apply {
         type = MediaWrapper.TYPE_DIR
@@ -468,4 +443,25 @@ fun Fragment.showParentFolder(media: MediaWrapper) {
     intent.putExtra(KEY_MEDIA, parent)
     intent.putExtra("fragment", SecondaryActivity.FILE_BROWSER)
     startActivity(intent)
+}
+
+/**
+ * Finds the [ViewPager2] current fragment
+ * @param fragmentManager: The used [FragmentManager]
+ *
+ * @return the current fragment if found
+ */
+fun ViewPager2.findCurrentFragment(fragmentManager: FragmentManager): Fragment? {
+    return fragmentManager.findFragmentByTag("f$currentItem")
+}
+
+/**
+ * Finds the [ViewPager2] fragment at a specified position
+ * @param fragmentManager: The used [FragmentManager]
+ * @param position: The position to look at
+ *
+ * @return the fragment if found
+ */
+fun ViewPager2.findFragmentAt(fragmentManager: FragmentManager, position: Int): Fragment? {
+    return fragmentManager.findFragmentByTag("f$position")
 }

@@ -28,14 +28,16 @@ ext {
     library_version = "$rootProject.ext.medialibraryVersion"
 }
 android {
+    namespace 'org.videolan.medialibrary'
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
-    compileSdkVersion rootProject.ext.compileSdkVersion
+
     defaultConfig {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
+        compileSdk rootProject.ext.compileSdkVersion
     }
 
     sourceSets {
@@ -72,6 +74,10 @@ android {
     dataBinding {
         enabled = true
     }
+    buildFeatures {
+        renderScript true
+        aidl true
+    }
 
     // Make per-variant version code
     libraryVariants.all { variant ->
@@ -97,11 +103,6 @@ dependencies {
     api "androidx.fragment:fragment:$rootProject.ext.androidxFragmentVersion"
     testImplementation "junit:junit:$rootProject.ext.junitVersion"
     testImplementation "org.robolectric:robolectric:4.3.1"
-
-}
-
-mavenPublish {
-    releaseSigningEnabled = false
 }
 
 apply from: '../buildsystem/publish.gradle'

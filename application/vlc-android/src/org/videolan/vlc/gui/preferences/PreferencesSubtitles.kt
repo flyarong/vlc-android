@@ -99,7 +99,7 @@ class PreferencesSubtitles : BasePreferenceFragment(), SharedPreferences.OnShare
 
         val presetPreference = findPreference<ListPreference>("subtitles_presets")!!
         presetPreference.value = "-1"
-        presetPreference.setOnPreferenceChangeListener { preference, newValue ->
+        presetPreference.setOnPreferenceChangeListener { _, newValue ->
             resetAll()
             when (newValue) {
                 "1" -> subtitlesSize.value = "13"
@@ -160,15 +160,15 @@ class PreferencesSubtitles : BasePreferenceFragment(), SharedPreferences.OnShare
 
     override fun onStart() {
         super.onStart()
-        preferenceScreen.sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.registerOnSharedPreferenceChangeListener(this)
     }
 
     override fun onStop() {
         super.onStop()
-        preferenceScreen.sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.unregisterOnSharedPreferenceChangeListener(this)
     }
 
-    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         when (key) {
             "subtitles_size", "subtitles_bold", "subtitle_text_encoding",
             "subtitles_color", "subtitles_color_opacity",
@@ -202,7 +202,7 @@ class PreferencesSubtitles : BasePreferenceFragment(), SharedPreferences.OnShare
     }
 
     private fun prepareLocaleList() {
-        val localePair = LocaleUtils.getLocalesUsedInProject(requireActivity(), BuildConfig.TRANSLATION_ARRAY, getString(R.string.no_track_preference))
+        val localePair = LocaleUtils.getLocalesUsedInProject(BuildConfig.TRANSLATION_ARRAY, getString(R.string.no_track_preference))
         preferredSubtitleTrack.entries = localePair.localeEntries
         preferredSubtitleTrack.entryValues = localePair.localeEntryValues
     }

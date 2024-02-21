@@ -21,6 +21,7 @@ import org.videolan.television.R
 import org.videolan.television.databinding.MediaBrowserTvItemBinding
 import org.videolan.television.databinding.MediaBrowserTvItemListBinding
 import org.videolan.television.ui.browser.TvAdapterUtils
+import org.videolan.tools.Settings
 import org.videolan.vlc.gui.DiffUtilAdapter
 import org.videolan.vlc.gui.helpers.getBitmapFromDrawable
 import org.videolan.vlc.gui.helpers.getMediaIconDrawable
@@ -44,6 +45,7 @@ class FileTvItemAdapter(private val eventsHandler: IEventsHandler<MediaLibraryIt
 
     private val defaultCover: BitmapDrawable?
     private var focusListener: FocusListener? = null
+    private var seenMediaMarkerVisible: Boolean  =true
 
     init {
         val ctx = when (eventsHandler) {
@@ -51,9 +53,12 @@ class FileTvItemAdapter(private val eventsHandler: IEventsHandler<MediaLibraryIt
             is Fragment -> eventsHandler.context
             else -> null
         }
-        defaultCover = ctx?.let { BitmapDrawable(it.resources, getBitmapFromDrawable(it, R.drawable.ic_browser_unknown_big_normal)) }
+        defaultCover = ctx?.let { BitmapDrawable(it.resources, getBitmapFromDrawable(it, R.drawable.ic_unknown_big)) }
+        seenMediaMarkerVisible = ctx?.let { Settings.getInstance(it).getBoolean("media_seen", true) }
+                ?: true
     }
 
+    @Suppress("UNCHECKED_CAST")
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MediaTvItemAdapter.AbstractMediaItemViewHolder<ViewDataBinding> {
         val inflater = LayoutInflater.from(parent.context)
         return if (inGrid)
@@ -150,6 +155,7 @@ class FileTvItemAdapter(private val eventsHandler: IEventsHandler<MediaLibraryIt
                 }
             }
             if (AndroidUtil.isLolliPopOrLater) binding.container.clipToOutline = true
+            binding.showSeen = seenMediaMarkerVisible
         }
 
         override fun recycle() {
@@ -237,6 +243,7 @@ class FileTvItemAdapter(private val eventsHandler: IEventsHandler<MediaLibraryIt
                 }
             }
             binding.container.clipToOutline = true
+            binding.showSeen = seenMediaMarkerVisible
         }
 
         override fun recycle() {

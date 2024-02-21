@@ -23,10 +23,13 @@
 
 package org.videolan.vlc.gui.preferences
 
+import android.app.Activity
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.Bundle
 import android.view.View
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.os.bundleOf
 import androidx.fragment.app.FragmentActivity
 import androidx.preference.CheckBoxPreference
@@ -34,10 +37,25 @@ import androidx.preference.ListPreference
 import androidx.preference.Preference
 import org.videolan.libvlc.util.AndroidUtil
 import org.videolan.medialibrary.interfaces.Medialibrary
-import org.videolan.resources.*
-import org.videolan.tools.*
-import org.videolan.vlc.BuildConfig
+import org.videolan.resources.KEY_AUDIO_LAST_PLAYLIST
+import org.videolan.resources.KEY_CURRENT_AUDIO
+import org.videolan.resources.KEY_CURRENT_AUDIO_RESUME_ARTIST
+import org.videolan.resources.KEY_CURRENT_AUDIO_RESUME_THUMB
+import org.videolan.resources.KEY_CURRENT_AUDIO_RESUME_TITLE
+import org.videolan.resources.KEY_CURRENT_MEDIA
+import org.videolan.resources.KEY_CURRENT_MEDIA_RESUME
+import org.videolan.resources.KEY_MEDIA_LAST_PLAYLIST
+import org.videolan.resources.KEY_MEDIA_LAST_PLAYLIST_RESUME
+import org.videolan.resources.util.parcelable
+import org.videolan.tools.AUDIO_RESUME_PLAYBACK
+import org.videolan.tools.PLAYBACK_HISTORY
+import org.videolan.tools.RESULT_RESTART
+import org.videolan.tools.Settings
+import org.videolan.tools.Settings.isPinCodeSet
+import org.videolan.tools.VIDEO_RESUME_PLAYBACK
 import org.videolan.vlc.R
+import org.videolan.vlc.gui.PinCodeActivity
+import org.videolan.vlc.gui.PinCodeReason
 import org.videolan.vlc.gui.SecondaryActivity
 import org.videolan.vlc.gui.dialogs.ConfirmAudioPlayQueueDialog
 import org.videolan.vlc.gui.helpers.UiTools
@@ -46,24 +64,34 @@ import org.videolan.vlc.util.Permissions
 
 class PreferencesFragment : BasePreferenceFragment(), SharedPreferences.OnSharedPreferenceChangeListener {
 
+    var pinCodeResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            loadFragment(PreferencesParentalControl())
+        }
+    }
+
     override fun getXml() = R.xml.preferences
 
     override fun getTitleId() = R.string.preferences
 
     override fun onStart() {
         super.onStart()
-        preferenceScreen.sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.registerOnSharedPreferenceChangeListener(this)
     }
 
     override fun onStop() {
         super.onStop()
-        preferenceScreen.sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.unregisterOnSharedPreferenceChangeListener(this)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        findPreference<Preference>("remote_access_category")?.isVisible = Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        findPreference<Preference>("extensions_category")?.isVisible = BuildConfig.DEBUG
-        arguments?.getParcelable<PreferenceItem>(EXTRA_PREF_END_POINT)?.let { endPoint ->
+        arguments?.parcelable<PreferenceItem>(EXTRA_PREF_END_POINT)?.let { endPoint ->
             when (endPoint.parentScreen) {
                 R.xml.preferences_ui -> loadFragment(PreferencesUi().apply {
                     arguments = bundleOf(EXTRA_PREF_END_POINT to endPoint)
@@ -77,13 +105,13 @@ class PreferencesFragment : BasePreferenceFragment(), SharedPreferences.OnShared
                 R.xml.preferences_audio -> loadFragment(PreferencesAudio().apply {
                     arguments = bundleOf(EXTRA_PREF_END_POINT to endPoint)
                 })
-                R.xml.preferences_extensions -> loadFragment(PreferencesExtensions().apply {
-                    arguments = bundleOf(EXTRA_PREF_END_POINT to endPoint)
-                })
                 R.xml.preferences_adv -> loadFragment(PreferencesAdvanced().apply {
                     arguments = bundleOf(EXTRA_PREF_END_POINT to endPoint)
                 })
                 R.xml.preferences_casting -> loadFragment(PreferencesCasting().apply {
+                    arguments = bundleOf(EXTRA_PREF_END_POINT to endPoint)
+                })
+                R.xml.preferences_remote_access -> loadFragment(PreferencesRemoteAccess().apply {
                     arguments = bundleOf(EXTRA_PREF_END_POINT to endPoint)
                 })
             }
@@ -109,9 +137,17 @@ class PreferencesFragment : BasePreferenceFragment(), SharedPreferences.OnShared
             "video_category" -> loadFragment(PreferencesVideo())
             "subtitles_category" -> loadFragment(PreferencesSubtitles())
             "audio_category" -> loadFragment(PreferencesAudio())
-            "extensions_category" -> loadFragment(PreferencesExtensions())
             "adv_category" -> loadFragment(PreferencesAdvanced())
             "casting_category" -> loadFragment(PreferencesCasting())
+            "parental_control" -> {
+                if (requireActivity().isPinCodeSet())
+                    loadFragment(PreferencesParentalControl())
+                else {
+                    val intent = PinCodeActivity.getIntent(requireActivity(), PinCodeReason.FIRST_CREATION)
+                    pinCodeResult.launch(intent)
+                }
+            }
+            "remote_access_category" -> loadFragment(PreferencesRemoteAccess())
             PLAYBACK_HISTORY -> {
                 val activity = activity
                 activity?.setResult(RESULT_RESTART)
@@ -159,8 +195,10 @@ class PreferencesFragment : BasePreferenceFragment(), SharedPreferences.OnShared
         return true
     }
 
-    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         val activity = activity ?: return
+        if (sharedPreferences == null || key == null) return
+
         when (key) {
             "video_action_switch" -> if (!AndroidUtil.isOOrLater && findPreference<ListPreference>(key)?.value == "2"
                     && !Permissions.canDrawOverlays(activity))

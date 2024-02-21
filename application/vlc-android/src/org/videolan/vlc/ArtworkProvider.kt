@@ -19,12 +19,18 @@
 
 package org.videolan.vlc
 
-import android.content.*
+import android.content.ContentProvider
+import android.content.ContentResolver
+import android.content.ContentUris
+import android.content.ContentValues
+import android.content.Context
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.Bitmap.CompressFormat
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.net.Uri
 import android.os.Binder
 import android.os.Build
@@ -32,6 +38,7 @@ import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.util.LruCache
+import androidx.annotation.DrawableRes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.videolan.libvlc.FactoryManager
@@ -45,16 +52,20 @@ import org.videolan.resources.VLCInstance
 import org.videolan.resources.util.getFromMl
 import org.videolan.tools.removeFileScheme
 import org.videolan.vlc.gui.helpers.AudioUtil
+import org.videolan.vlc.gui.helpers.BitmapUtil
 import org.videolan.vlc.gui.helpers.getBitmapFromDrawable
 import org.videolan.vlc.media.MediaSessionBrowser
 import org.videolan.vlc.util.AccessControl
 import org.videolan.vlc.util.ThumbnailsProvider
-import java.io.*
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.security.SecureRandom
-import java.text.DecimalFormat
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Calendar
+import java.util.Locale
 import java.util.zip.CRC32
 import kotlin.math.max
 
@@ -110,14 +121,23 @@ class ArtworkProvider : ContentProvider() {
                 Log.d(TAG, "openFile() Time: ${getTimestamp()} URI: $uri " +
                         "Thread: ${Thread.currentThread().name} Caller: $callingPackage")
             }
+            val bigVariant = uri.getQueryParameter(BIG_VARIANT)  == "1"
+            val remoteAccess = uri.getQueryParameter(REMOTE_ACCESS)  == "1"
+            //retrieve thumbnails.
             when (uriSegments[0]) {
                 HISTORY -> getPFDFromByteArray(getHistory(ctx))
                 LAST_ADDED -> getPFDFromByteArray(getLastAdded(ctx))
                 SHUFFLE_ALL -> getPFDFromByteArray(getShuffleAll(ctx))
-                MEDIA -> getMediaImage(ctx, ContentUris.parseId(uri))
-                ALBUM -> getCategoryImage(ctx, ALBUM, ContentUris.parseId(uri))
-                ARTIST -> getCategoryImage(ctx, ARTIST, ContentUris.parseId(uri))
+                VIDEO -> if (remoteAccess)
+                    getMediaImage(ctx, ContentUris.parseId(uri), false, fallbackIcon =  if (bigVariant) R.drawable.ic_remote_video_unknown_big else R.drawable.ic_remote_video_unknown, isLarge = true)
+                else
+                    getMediaImage(ctx, ContentUris.parseId(uri), false)
+                MEDIA -> getMediaImage(ctx, ContentUris.parseId(uri), fallbackIcon = if (remoteAccess) if (bigVariant) R.drawable.ic_remote_song_unknown_big else R.drawable.ic_remote_song_unknown else null)
+                ALBUM -> getCategoryImage(ctx, ALBUM, ContentUris.parseId(uri), remoteAccess, bigVariant)
+                ARTIST -> getCategoryImage(ctx, ARTIST, ContentUris.parseId(uri), remoteAccess, bigVariant)
                 REMOTE -> getRemoteImage(ctx, uri.getQueryParameter(PATH))
+                GENRE -> if (remoteAccess) getGenreImage(ctx, ContentUris.parseId(uri), fallbackIcon = if (bigVariant) R.drawable.ic_remote_genre_unknown_big else R.drawable.ic_remote_genre_unknown) else getGenreImage(ctx, ContentUris.parseId(uri))
+                PLAYLIST -> if (remoteAccess) getPlaylistImage(ctx, ContentUris.parseId(uri), fallbackIcon = if (bigVariant) R.drawable.ic_remote_playlist_unknown_big else R.drawable.ic_remote_playlist_unknown) else getPlaylistImage(ctx, ContentUris.parseId(uri))
                 PLAY_ALL -> getPlayAllImage(ctx, uriSegments[1], ContentUris.parseId(uri),
                         uri.getBooleanQueryParameter(SHUFFLE, false))
                 else -> throw FileNotFoundException("Uri is not supported: $uri")
@@ -140,7 +160,9 @@ class ArtworkProvider : ContentProvider() {
                 var bitmap = AudioUtil.readCoverBitmap(path, width)
                 if (bitmap != null) bitmap = padSquare(bitmap)
                 if (bitmap == null) bitmap = ctx.getBitmapFromDrawable(R.drawable.ic_no_media, width, width)
-                return@runBlocking encodeImage(bitmap)
+                return@runBlocking BitmapUtil.encodeImage(bitmap, ENABLE_TRACING){
+                    getTimestamp()
+                }
             }
         }
         return getPFDFromByteArray(image)
@@ -154,7 +176,7 @@ class ArtworkProvider : ContentProvider() {
      * getMediaImage in that results are not cached since AA is the only consumer and Glide within
      * AA performs caching.
      */
-    private fun getCategoryImage(context: Context, category: String, id: Long): ParcelFileDescriptor {
+    private fun getCategoryImage(context: Context, category: String, id: Long, forRemote:Boolean = false, bigVariant:Boolean = true): ParcelFileDescriptor {
         val mw: MediaLibraryItem? = runBlocking(Dispatchers.IO) {
             when (category) {
                 ALBUM -> context.getFromMl { getAlbum(id) }
@@ -171,12 +193,14 @@ class ArtworkProvider : ContentProvider() {
             runBlocking(Dispatchers.IO) {
                 var bitmap = ThumbnailsProvider.obtainBitmap(mw, 256)
                 if (bitmap != null) bitmap = padSquare(bitmap)
-                return@runBlocking encodeImage(bitmap)
+                return@runBlocking BitmapUtil.encodeImage(bitmap, ENABLE_TRACING) {
+                    getTimestamp()
+                }
             }?.let { return@getCategoryImage getPFDFromByteArray(it) }
         }
         val unknownIcon = when (category) {
-            ALBUM -> R.drawable.ic_auto_album_unknown
-            ARTIST -> R.drawable.ic_auto_artist_unknown
+            ALBUM -> if (forRemote) if (bigVariant) R.drawable.ic_remote_album_unknown_big else R.drawable.ic_remote_album_unknown else R.drawable.ic_auto_album_unknown
+            ARTIST -> if (forRemote) if (bigVariant) R.drawable.ic_remote_artist_unknown_big else R.drawable.ic_remote_artist_unknown else R.drawable.ic_auto_artist_unknown
             else -> R.drawable.ic_auto_nothumb
         }
         return getPFDFromBitmap(context.getBitmapFromDrawable(unknownIcon))
@@ -196,29 +220,101 @@ class ArtworkProvider : ContentProvider() {
      * If the artwork is already square on disk, we simply return the file (png, jpg)
      * If the artwork is not square, pad it square based on the max size of the largest dimension (webp)
      * If the artwork is null, or mediaId is 0, return a 512x512 orange cone (webp)
+     *
+     * @param ctx the context used to retrieve drawables
+     * @param mediaId the media ID
+     * @param padSquare if true, make the image sqaure
+     * @param fallbackIcon if set, the fallback icon will use this resource
+     * @param isLarge if true, a 16:9 ratio will be used (540x960)
+     * @return
      */
-    private fun getMediaImage(ctx: Context, mediaId: Long): ParcelFileDescriptor {
+    private fun getMediaImage(ctx: Context, mediaId: Long, padSquare:Boolean = true, @DrawableRes fallbackIcon: Int? = null, isLarge:Boolean = false): ParcelFileDescriptor {
         val width = 512
+        val height169 = 540
+        val width169 = 960
         val mw: MediaLibraryItem? = runBlocking(Dispatchers.IO) { ctx.getFromMl { getMedia(mediaId) } }
         mw?.let {
             if (!mw.artworkMrl.isNullOrEmpty()) {
                 val filePath = Uri.decode(mw.artworkMrl).removeFileScheme()
                 val file = File(filePath)
-                if (file.canRead() && isImageSquare(filePath)) return@getMediaImage ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                if (file.canRead() && isImageWithinBounds(filePath)) return@getMediaImage ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             }
         }
         // Non-square cover art will have an artworkMrl, which will be padded, re-encoded, and cached.
         // Videos, tracks with no cover art, etc. use mediaId and will be processed per library item.
-        val image = getOrPutImage(mw?.artworkMrl ?: "${mediaId}}") {
+        var key = mw?.artworkMrl ?: "$mediaId"
+        val nonTransparent = (Build.VERSION.SDK_INT >= 33) && ("com.android.systemui" == callingPackage)
+        if (nonTransparent) key += "_nonTransparent"
+        if (fallbackIcon != null) key += fallbackIcon.toString()
+        val image = getOrPutImage(key) {
             runBlocking(Dispatchers.IO) {
                 var bitmap = if (mw != null) ThumbnailsProvider.obtainBitmap(mw, width) else null
                 if (bitmap == null) bitmap = readEmbeddedArtwork(mw, width)
-                if (bitmap != null) bitmap = padSquare(bitmap)
-                if (bitmap == null) bitmap = ctx.getBitmapFromDrawable(R.drawable.ic_no_media, width, width)
-                return@runBlocking encodeImage(bitmap)
+                if (padSquare && bitmap != null) bitmap = padSquare(bitmap)
+                if (bitmap == null) {
+                    bitmap = ctx.getBitmapFromDrawable(fallbackIcon
+                            ?: R.drawable.ic_no_media, width, width)
+                    if (isLarge && bitmap != null) {
+                        val paint = Paint()
+                        val bmp = Bitmap.createBitmap(width169, height169, Bitmap.Config.ARGB_8888)
+                        val canvas = Canvas(bmp)
+                        canvas.drawBitmap(bitmap, 224F, 0F, paint)
+                        bitmap = bmp
+                    }
+                }
+                if (nonTransparent) bitmap = removeTransparency(bitmap)
+                return@runBlocking BitmapUtil.encodeImage(bitmap, ENABLE_TRACING) {
+                    getTimestamp()
+                }
             }
         }
         return getPFDFromByteArray(image)
+    }
+
+    /**
+     * Get the genre image and cache it. Without overlay
+     *
+     * @param ctx the context
+     * @param id the genre id
+     * @param fallbackIcon if set, the fallback icon will use this resource
+     * @return a ParcelFileDescriptor containing the genre image
+     */
+    private fun getGenreImage(ctx: Context, id: Long, @DrawableRes fallbackIcon: Int? = null): ParcelFileDescriptor? {
+        val bitmap = runBlocking(Dispatchers.IO) {
+            val tracks = ctx.getFromMl { getGenre(id)?.albums?.flatMap { it.tracks.toList() } }
+            val cover = tracks?.let {
+
+                ThumbnailsProvider.getPlaylistOrGenreImage("genre:${id}_256", tracks, 256)
+            }
+            return@runBlocking when {
+                cover != null -> cover
+                else -> ctx.getBitmapFromDrawable(fallbackIcon ?: R.drawable.ic_auto_genre)
+            }
+        }
+        return getPFDFromBitmap(bitmap)
+    }
+
+    /**
+     * Get the playlist image and cache it. Without overlay
+     *
+     * @param ctx the context
+     * @param id the playlist id
+     * @param fallbackIcon if set, the fallback icon will use this resource
+     * @return a ParcelFileDescriptor containing the playlist image
+     */
+    private fun getPlaylistImage(ctx: Context, id: Long, @DrawableRes fallbackIcon: Int? = null): ParcelFileDescriptor? {
+        val bitmap = runBlocking(Dispatchers.IO) {
+            val tracks = ctx.getFromMl { getPlaylist(id, true, false)?.tracks?.toList() }
+            val cover = tracks?.let {
+
+                ThumbnailsProvider.getPlaylistOrGenreImage("playlist:${id}_256", tracks, 256)
+            }
+            return@runBlocking when {
+                cover != null -> cover
+                else -> ctx.getBitmapFromDrawable(fallbackIcon ?: R.drawable.ic_auto_playlist)
+            }
+        }
+        return getPFDFromBitmap(bitmap)
     }
 
     private fun getPlayAllImage(ctx: Context, type: String, id: Long, shuffle: Boolean): ParcelFileDescriptor {
@@ -226,7 +322,7 @@ class ArtworkProvider : ContentProvider() {
             val tracks = when (type) {
                 GENRE -> ctx.getFromMl { getGenre(id)?.albums?.flatMap { it.tracks.toList() } }
                 ARTIST -> ctx.getFromMl { getArtist(id)?.tracks?.toList() }
-                PLAYLIST -> ctx.getFromMl { getPlaylist(id, true)?.tracks?.toList() }
+                PLAYLIST -> ctx.getFromMl { getPlaylist(id, true, false)?.tracks?.toList() }
                 else -> null
             }
             val cover = tracks?.let {
@@ -250,7 +346,7 @@ class ArtworkProvider : ContentProvider() {
     private fun getHistory(ctx: Context): ByteArray? {
         return runBlocking(Dispatchers.IO) {
             /* Last Played */
-            val lastMediaPlayed = ctx.getFromMl { lastMediaPlayed()?.toList()?.filter { MediaSessionBrowser.isMediaAudio(it) } }
+            val lastMediaPlayed = ctx.getFromMl { history(Medialibrary.HISTORY_TYPE_LOCAL)?.toList()?.filter { MediaSessionBrowser.isMediaAudio(it) } }
             if (!lastMediaPlayed.isNullOrEmpty()) {
                 return@runBlocking getHomeImage(ctx, HISTORY, lastMediaPlayed.toTypedArray())
             }
@@ -264,7 +360,7 @@ class ArtworkProvider : ContentProvider() {
             val audioCount = ctx.getFromMl { audioCount }
             /* Show cover art from the whole library */
             val offset = SecureRandom().nextInt((audioCount - MediaSessionBrowser.MAX_COVER_ART_ITEMS).coerceAtLeast(1))
-            val list = ctx.getFromMl { getPagedAudio(Medialibrary.SORT_ALPHA, false, false, MediaSessionBrowser.MAX_COVER_ART_ITEMS, offset) }
+            val list = ctx.getFromMl { getPagedAudio(Medialibrary.SORT_ALPHA, false, false, false, MediaSessionBrowser.MAX_COVER_ART_ITEMS, offset) }
             return@runBlocking getHomeImage(ctx, SHUFFLE_ALL, list)
         }
     }
@@ -272,7 +368,7 @@ class ArtworkProvider : ContentProvider() {
     private fun getLastAdded(ctx: Context): ByteArray? {
         return runBlocking(Dispatchers.IO) {
             /* Last Added */
-            val recentAudio = ctx.getFromMl { getPagedAudio(Medialibrary.SORT_INSERTIONDATE, true, false, MediaSessionBrowser.MAX_HISTORY_SIZE, 0) }
+            val recentAudio = ctx.getFromMl { getPagedAudio(Medialibrary.SORT_INSERTIONDATE, true, false, false, MediaSessionBrowser.MAX_HISTORY_SIZE, 0) }
             return@runBlocking getHomeImage(ctx, LAST_ADDED, recentAudio)
         }
     }
@@ -301,19 +397,27 @@ class ArtworkProvider : ContentProvider() {
                 cover = ThumbnailsProvider.getPlaylistOrGenreImage("${key}_256", tracks, 256, iconAddition)
             }
         }
-        return encodeImage(cover ?: context.getBitmapFromDrawable(R.drawable.ic_auto_playall))
+        return BitmapUtil.encodeImage(cover ?: context.getBitmapFromDrawable(R.drawable.ic_auto_playall), ENABLE_TRACING){
+            getTimestamp()
+        }
     }
 
     /**
-     * Test if the cover art image is square to determine if padding is required
+     * Test if the cover art image is square to determine if padding is required. Also check if the
+     * image is larger than 2000x2000px. Images 3000x3000px crash Android Auto.
      */
-    private fun isImageSquare(path: String): Boolean {
+    private fun isImageWithinBounds(path: String): Boolean {
         val options = BitmapFactory.Options()
         /* Get the resolution of the bitmap without allocating the memory */
         options.inJustDecodeBounds = true
         BitmapFactory.decodeFile(path, options)
-        return if (options.outWidth == -1 || options.outHeight == -1) false
-        else options.outWidth == options.outHeight
+        val outWidth = options.outWidth
+        val outHeight = options.outHeight
+        return when {
+            outWidth == -1 || outHeight == -1 -> false
+            outWidth > 2_000 || outHeight > 2_000 -> false
+            else -> outWidth == outHeight
+        }
     }
 
     /**
@@ -337,20 +441,16 @@ class ArtworkProvider : ContentProvider() {
     }
 
     /**
-     * Encode bitmap in WEBP format.
+     * Workaround for Android 13 notification bar media controls. Crossfade animation between old
+     * cover art and new cover art does not work correctly with transparency.
      */
-    @Suppress("DEPRECATION")
-    private fun encodeImage(bmp: Bitmap?): ByteArray? {
-        if (bmp == null) return null
-        val bos = ByteArrayOutputStream()
-        val startTime = if (ENABLE_TRACING) System.currentTimeMillis() else 0L
-        bmp.compress(CompressFormat.WEBP, 100, bos)
-        if (ENABLE_TRACING) {
-            val endTime = System.currentTimeMillis()
-            val ratio = DecimalFormat("###.#%").format((1 - (bos.size().toDouble() / bmp.byteCount.toDouble())))
-            Log.d(TAG, "encImage() Time: ${getTimestamp()} Duration: " + (endTime - startTime) + "ms Comp. Ratio: $ratio Thread: ${Thread.currentThread().name}")
-        }
-        return bos.toByteArray()
+    private fun removeTransparency(src: Bitmap?): Bitmap? {
+        if (src == null) return null
+        val dst = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        dst.eraseColor(Color.BLACK)
+        val c = Canvas(dst)
+        c.drawBitmap(src, 0f, 0f, null)
+        return dst
     }
 
     /**
@@ -435,8 +535,11 @@ class ArtworkProvider : ContentProvider() {
     companion object {
 
         const val PATH = "path"
+        const val BIG_VARIANT = "big_variant"
+        const val REMOTE_ACCESS = "remote_access"
         const val ALBUM = "album"
         const val GENRE = "genre"
+        const val VIDEO = "video"
         const val MEDIA = "media"
         const val ARTIST = "artist"
         const val REMOTE = "remote"
@@ -447,8 +550,8 @@ class ArtworkProvider : ContentProvider() {
         const val SHUFFLE = "shuffle"
         const val SHUFFLE_ALL = "shuffle_all"
 
-        //Used to store a single webp encoded copy of the currently playing artwork
-        private val memCache: LruCache<String, ByteArray> = LruCache<String, ByteArray>(1)
+        //Used to store webp encoded bitmap of the currently playing artwork
+        private val memCache: LruCache<String, ByteArray> = LruCache<String, ByteArray>(if (Build.VERSION.SDK_INT >= 33) 2 else 1)
 
         @Synchronized
         fun clear() {
@@ -478,7 +581,7 @@ class ArtworkProvider : ContentProvider() {
         fun computeExpiration(halfDayExpiration: Boolean = true): String {
             val cal = Calendar.getInstance()
             if (halfDayExpiration) {
-                cal.set(Calendar.HOUR, if (cal.get(Calendar.HOUR) < 12) 0 else 12)
+                cal.set(Calendar.HOUR_OF_DAY, if (cal.get(Calendar.HOUR_OF_DAY) < 12) 0 else 12)
                 cal.set(Calendar.MINUTE, 0)
                 cal.set(Calendar.SECOND, 0)
                 cal.set(Calendar.MILLISECOND, 0)

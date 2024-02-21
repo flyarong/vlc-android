@@ -27,7 +27,6 @@ import android.annotation.TargetApi
 import android.content.Context
 import android.graphics.drawable.BitmapDrawable
 import android.os.Build
-import android.os.Handler
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -48,6 +47,7 @@ import org.videolan.medialibrary.interfaces.media.MediaWrapper
 import org.videolan.medialibrary.media.MediaLibraryItem
 import org.videolan.medialibrary.media.MediaLibraryItem.FLAG_SELECTED
 import org.videolan.resources.AppContextProvider
+import org.videolan.resources.UPDATE_FAVORITE_STATE
 import org.videolan.resources.UPDATE_REORDER
 import org.videolan.resources.UPDATE_SELECTION
 import org.videolan.resources.interfaces.FocusListener
@@ -58,17 +58,21 @@ import org.videolan.vlc.BR
 import org.videolan.vlc.R
 import org.videolan.vlc.databinding.AudioBrowserCardItemBinding
 import org.videolan.vlc.databinding.AudioBrowserItemBinding
+import org.videolan.vlc.gui.helpers.MARQUEE_ACTION
 import org.videolan.vlc.gui.helpers.MarqueeViewHolder
 import org.videolan.vlc.gui.helpers.SelectorViewHolder
 import org.videolan.vlc.gui.helpers.enableMarqueeEffect
 import org.videolan.vlc.gui.helpers.getAudioIconDrawable
 import org.videolan.vlc.gui.view.FastScroller
+import org.videolan.vlc.gui.view.MiniVisualizer
 import org.videolan.vlc.interfaces.IEventsHandler
 import org.videolan.vlc.interfaces.IListEventsHandler
 import org.videolan.vlc.interfaces.SwipeDragHelperAdapter
+import org.videolan.vlc.util.LifecycleAwareScheduler
 import org.videolan.vlc.util.isOTG
 import org.videolan.vlc.util.isSD
 import org.videolan.vlc.util.isSchemeSMB
+import org.videolan.vlc.viewmodels.PlaylistModel
 
 private const val SHOW_IN_LIST = -1
 
@@ -89,9 +93,26 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
     private var focusNext = -1
     private var focusListener: FocusListener? = null
     lateinit var inflater: LayoutInflater
-    private val handler by lazy(LazyThreadSafetyMode.NONE) { Handler() }
+    private var scheduler: LifecycleAwareScheduler? = null
     var stopReorder = false
+    var areSectionsEnabled = true
+    private var currentPlayingVisu: MiniVisualizer? = null
+    private var model: PlaylistModel? = null
 
+    var currentMedia:MediaWrapper? = null
+        set(media) {
+            if (media == currentMedia) return
+            val former = currentMedia
+            field = media
+            if (former != null) currentList?.indexOf(former)?.let {
+                notifyItemChanged(it)
+            }
+            if (media != null) {
+                currentList?.indexOf(media)?.let {
+                    notifyItemChanged(it)
+                }
+            }
+        }
     protected fun inflaterInitialized() = ::inflater.isInitialized
 
     val isEmpty: Boolean
@@ -108,6 +129,7 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
         defaultCoverCard = getAudioIconDrawable(ctx, type, true)
     }
 
+    @Suppress("UNCHECKED_CAST")
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AbstractMediaItemViewHolder<ViewDataBinding> {
         if (!::inflater.isInitialized) {
             inflater = LayoutInflater.from(parent.context)
@@ -125,12 +147,22 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
 
     override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
         super.onAttachedToRecyclerView(recyclerView)
-        if (Settings.listTitleEllipsize == 4) enableMarqueeEffect(recyclerView, handler)
+        if (Settings.listTitleEllipsize == 4) scheduler = enableMarqueeEffect(recyclerView)
     }
 
     override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
-        if (Settings.listTitleEllipsize == 4) handler.removeCallbacksAndMessages(null)
+        scheduler?.cancelAction("")
+        currentMedia = null
+        currentPlayingVisu = null
         super.onDetachedFromRecyclerView(recyclerView)
+    }
+
+    fun setCurrentlyPlaying(playing: Boolean) {
+        if (playing) currentPlayingVisu?.start() else currentPlayingVisu?.stop()
+    }
+
+    fun setModel(model: PlaylistModel) {
+        this.model = model
     }
 
     override fun onBindViewHolder(holder: AbstractMediaItemViewHolder<ViewDataBinding>, position: Int) {
@@ -147,6 +179,18 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
             holder.binding.setVariable(BR.isSD, item.uri.isSD())
             holder.binding.setVariable(BR.isPresent, item.isPresent)
         } else holder.binding.setVariable(BR.isPresent, true)
+        val miniVisualizer: MiniVisualizer = holder.getMiniVisu()
+        if (currentMedia == item) {
+            if (model?.playing != false) miniVisualizer.start() else miniVisualizer.stop()
+            miniVisualizer.visibility = View.VISIBLE
+            holder.changePlayingVisibility(true)
+            currentPlayingVisu = miniVisualizer
+        } else {
+            miniVisualizer.stop()
+            holder.changePlayingVisibility(false)
+            miniVisualizer.visibility = View.INVISIBLE
+        }
+        item?.let { holder.binding.setVariable(BR.isFavorite, it.isFavorite) }
         holder.binding.setVariable(BR.inSelection,multiSelectHelper.inActionMode)
         holder.binding.invalidateAll()
         holder.binding.executePendingBindings()
@@ -173,13 +217,14 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
                     UPDATE_REORDER -> {
                        holder.binding.invalidateAll()
                     }
+                    UPDATE_FAVORITE_STATE -> getItem(position)?.let { holder.binding.setVariable(BR.isFavorite, it.isFavorite) }
                 }
             }
         }
     }
 
     override fun onViewRecycled(h: AbstractMediaItemViewHolder<ViewDataBinding>) {
-        if (Settings.listTitleEllipsize == 4) handler.removeCallbacksAndMessages(null)
+        scheduler?.cancelAction(MARQUEE_ACTION)
         h.recycle()
         super.onViewRecycled(h)
     }
@@ -213,7 +258,7 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
     }
 
     override fun hasSections(): Boolean {
-        return true
+        return areSectionsEnabled
     }
 
     override fun onItemMove(fromPosition: Int, toPosition: Int) {
@@ -283,6 +328,12 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
             binding.title.isSelected = false
         }
 
+        override fun getMiniVisu() = binding.playing
+
+        override fun changePlayingVisibility(isCurrent: Boolean) {
+            binding.mediaCover.visibility = if (isCurrent) View.INVISIBLE else View.VISIBLE
+        }
+
     }
 
     @TargetApi(Build.VERSION_CODES.M)
@@ -321,6 +372,10 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
             binding.title.isSelected = false
         }
 
+        override fun getMiniVisu() = binding.playing
+
+        override fun changePlayingVisibility(isCurrent: Boolean) { }
+
     }
 
     @TargetApi(Build.VERSION_CODES.M)
@@ -354,7 +409,10 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
 
         abstract fun setItem(item: MediaLibraryItem?)
 
+        abstract fun getMiniVisu():MiniVisualizer
+
         abstract fun recycle()
+        abstract fun changePlayingVisibility(isCurrent: Boolean)
 
     }
 
@@ -382,8 +440,11 @@ open class AudioBrowserAdapter @JvmOverloads constructor(
                 return false
             }
 
-            override fun getChangePayload(oldItem: MediaLibraryItem, newItem: MediaLibraryItem): Any? {
+            override fun getChangePayload(oldItem: MediaLibraryItem, newItem: MediaLibraryItem): Any {
                 preventNextAnim = false
+                when {
+                    oldItem.isFavorite != newItem.isFavorite  -> return UPDATE_FAVORITE_STATE
+                }
                 return UPDATE_PAYLOAD
             }
         }

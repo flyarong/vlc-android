@@ -26,6 +26,7 @@ import org.videolan.medialibrary.interfaces.media.MediaWrapper
 import org.videolan.medialibrary.media.MediaLibraryItem
 import org.videolan.resources.CATEGORY
 import org.videolan.resources.ITEM
+import org.videolan.resources.util.parcelable
 import org.videolan.television.R
 import org.videolan.television.ui.FileTvItemAdapter
 import org.videolan.television.ui.TvItemAdapter
@@ -43,12 +44,18 @@ import org.videolan.vlc.util.DialogDelegate
 import org.videolan.vlc.util.FileUtils
 import org.videolan.vlc.util.IDialogManager
 import org.videolan.vlc.util.isSchemeSupported
-import org.videolan.vlc.viewmodels.browser.*
+import org.videolan.vlc.util.onAnyChange
+import org.videolan.vlc.viewmodels.browser.BrowserModel
+import org.videolan.vlc.viewmodels.browser.IPathOperationDelegate
+import org.videolan.vlc.viewmodels.browser.TYPE_FILE
+import org.videolan.vlc.viewmodels.browser.TYPE_NETWORK
+import org.videolan.vlc.viewmodels.browser.getBrowserModel
 
 private const val TAG = "FileBrowserTvFragment"
 
 class FileBrowserTvFragment : BaseBrowserTvFragment<MediaLibraryItem>(), PathAdapterListener, IDialogManager {
 
+    private lateinit var dataObserver: RecyclerView.AdapterDataObserver
     private var favExists: Boolean = false
     private var isRootLevel = false
     private lateinit var browserFavRepository: BrowserFavRepository
@@ -67,15 +74,43 @@ class FileBrowserTvFragment : BaseBrowserTvFragment<MediaLibraryItem>(), PathAda
     override fun getColumnNumber() = resources.getInteger(R.integer.tv_songs_col_count)
 
     override fun provideAdapter(eventsHandler: IEventsHandler<MediaLibraryItem>, itemSize: Int): TvItemAdapter {
-        return FileTvItemAdapter(this, itemSize, isRootLevel && getCategory() == TYPE_NETWORK)
+        val fileTvItemAdapter = FileTvItemAdapter(this, itemSize, isRootLevel && getCategory() == TYPE_NETWORK)
+        // restore the position from the source when navigating from Arian
+        dataObserver = fileTvItemAdapter.onAnyChange {
+            val source = (viewModel as IPathOperationDelegate).getSource()
+            val selectedIndex = if (source != null) {
+                if (fileTvItemAdapter.dataset.contains(source)) {
+                    //the source has been found because we are on its direct parent
+                    fileTvItemAdapter.dataset.indexOf(source)
+                } else {
+                    // we look for the item included in the source path to find what item to focus
+                    var index: Int? = null
+                    fileTvItemAdapter.dataset.forEach {
+                        if ((source as? MediaWrapper)?.uri?.toString()?.startsWith(it.uri.toString()) == true) {
+                            index = fileTvItemAdapter.dataset.indexOf(it)
+                        }
+                    }
+                    index
+                }
+            } else null
+            if (selectedIndex != null) {
+                val lm = binding.list.layoutManager as LinearLayoutManager
+                lm.scrollToPosition(selectedIndex)
+                lm.getChildAt(selectedIndex)?.let {
+                    it.requestFocus()
+                    (viewModel as IPathOperationDelegate).consumeSource()
+                }
+            }
+        }
+        return fileTvItemAdapter
     }
 
     override fun getDisplayPrefId() = "display_tv_file_${getCategory()}"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        currentItem = if (savedInstanceState != null) savedInstanceState.getParcelable<Parcelable>(ITEM) as? MediaLibraryItem
-        else arguments?.getParcelable(ITEM) as? MediaLibraryItem
+        currentItem = if (savedInstanceState != null) savedInstanceState.parcelable<Parcelable>(ITEM) as? MediaLibraryItem
+        else arguments?.parcelable(ITEM) as? MediaLibraryItem
 
         isRootLevel = arguments?.getBoolean("rootLevel") ?: false
         (currentItem as? MediaWrapper)?.run { mrl = location }
@@ -182,6 +217,7 @@ class FileBrowserTvFragment : BaseBrowserTvFragment<MediaLibraryItem>(), PathAda
             if (supportFragmentManager.backStackEntryCount == 0) browse(MLServiceLocator.getAbstractMediaWrapper(tag.toUri()), false)
             else {
                 (viewModel as IPathOperationDelegate).setDestination(MLServiceLocator.getAbstractMediaWrapper(tag.toUri()))
+                (viewModel as IPathOperationDelegate).setSource(currentItem)
                 supportFragmentManager.popBackStack()
             }
         }
@@ -200,9 +236,9 @@ class FileBrowserTvFragment : BaseBrowserTvFragment<MediaLibraryItem>(), PathAda
             animationDelegate.setVisibility(binding.imageButtonFavorite, View.VISIBLE)
             animationDelegate.setVisibility(binding.favoriteDescription, View.VISIBLE)
             favExists = (currentItem as? MediaWrapper)?.let { browserFavRepository.browserFavExists(it.uri) } ?: false
-            binding.favoriteButton.setImageResource(if (favExists) R.drawable.ic_favorite else R.drawable.ic_favorite_outline)
+            binding.favoriteButton.setImageResource(if (favExists) R.drawable.ic_tv_browser_favorite else R.drawable.ic_tv_browser_favorite_outline)
             binding.favoriteButton.contentDescription = getString(if (favExists) R.string.favorites_remove else R.string.favorites_add)
-            binding.imageButtonFavorite.setImageResource(if (favExists) R.drawable.ic_fabtvmini_bookmark else R.drawable.ic_fabtvmini_bookmark_outline)
+            binding.imageButtonFavorite.setImageResource(if (favExists) R.drawable.ic_fabtvmini_favorite else R.drawable.ic_fabtvmini_favorite_outline)
             binding.imageButtonFavorite.contentDescription = getString(if (favExists) R.string.favorites_remove else R.string.favorites_add)
         }
         binding.favoriteButton.setOnClickListener(favoriteClickListener)
@@ -228,6 +264,11 @@ class FileBrowserTvFragment : BaseBrowserTvFragment<MediaLibraryItem>(), PathAda
     override fun onStop() {
         super.onStop()
         (viewModel as BrowserModel).stop()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (::dataObserver.isInitialized) (adapter as FileTvItemAdapter).unregisterAdapterDataObserver(dataObserver)
     }
 
     override fun getCategory() = (viewModel as BrowserModel).type
@@ -276,9 +317,9 @@ class FileBrowserTvFragment : BaseBrowserTvFragment<MediaLibraryItem>(), PathAda
                     }
                 }
                 favExists = browserFavRepository.browserFavExists(mw.uri)
-                binding.favoriteButton.setImageResource(if (favExists) R.drawable.ic_favorite else R.drawable.ic_favorite_outline)
+                binding.favoriteButton.setImageResource(if (favExists) R.drawable.ic_tv_browser_favorite else R.drawable.ic_tv_browser_favorite_outline)
                 binding.favoriteButton.contentDescription = getString(if (favExists) R.string.favorites_remove else R.string.favorites_add)
-                binding.imageButtonFavorite.setImageResource(if (favExists) R.drawable.ic_fabtvmini_bookmark else R.drawable.ic_fabtvmini_bookmark_outline)
+                binding.imageButtonFavorite.setImageResource(if (favExists) R.drawable.ic_fabtvmini_favorite else R.drawable.ic_fabtvmini_favorite_outline)
                 binding.imageButtonFavorite.contentDescription = getString(if (favExists) R.string.favorites_remove else R.string.favorites_add)
             }
         }

@@ -31,9 +31,12 @@ import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.RenderEffect
+import android.graphics.Shader
 import android.graphics.drawable.BitmapDrawable
 import android.media.MediaRouter
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.renderscript.*
@@ -61,6 +64,8 @@ import androidx.core.os.bundleOf
 import androidx.core.view.MenuItemCompat
 import androidx.databinding.BindingAdapter
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -86,11 +91,15 @@ import org.videolan.vlc.gui.*
 import org.videolan.vlc.gui.browser.MediaBrowserFragment
 import org.videolan.vlc.gui.dialogs.*
 import org.videolan.vlc.gui.helpers.BitmapUtil.vectorToBitmap
+import org.videolan.vlc.gui.helpers.hf.PinCodeDelegate
+import org.videolan.vlc.gui.helpers.hf.checkPIN
 import org.videolan.vlc.gui.preferences.PreferencesActivity
 import org.videolan.vlc.media.MediaUtils
 import org.videolan.vlc.media.getAll
 import org.videolan.vlc.providers.medialibrary.MedialibraryProvider
 import org.videolan.vlc.util.FileUtils
+import org.videolan.vlc.util.LifecycleAwareScheduler
+import org.videolan.vlc.util.SchedulerCallback
 import org.videolan.vlc.util.ThumbnailsProvider
 import org.videolan.vlc.util.openLinkIfPossible
 import kotlin.math.min
@@ -103,6 +112,8 @@ object UiTools {
     private var DEFAULT_COVER_AUDIO_AUTO_DRAWABLE: BitmapDrawable? = null
     private var DEFAULT_COVER_ALBUM_DRAWABLE: BitmapDrawable? = null
     private var DEFAULT_COVER_ARTIST_DRAWABLE: BitmapDrawable? = null
+    private var DEFAULT_COVER_PLAYLIST_DRAWABLE: BitmapDrawable? = null
+    private var DEFAULT_COVER_GENRE_DRAWABLE: BitmapDrawable? = null
     private var DEFAULT_COVER_MOVIE_DRAWABLE: BitmapDrawable? = null
     private var DEFAULT_COVER_TVSHOW_DRAWABLE: BitmapDrawable? = null
     private var DEFAULT_COVER_FOLDER_DRAWABLE: BitmapDrawable? = null
@@ -111,12 +122,14 @@ object UiTools {
     private var DEFAULT_COVER_AUDIO_DRAWABLE_BIG: BitmapDrawable? = null
     private var DEFAULT_COVER_ALBUM_DRAWABLE_BIG: BitmapDrawable? = null
     private var DEFAULT_COVER_ARTIST_DRAWABLE_BIG: BitmapDrawable? = null
+    private var DEFAULT_COVER_PLAYLIST_DRAWABLE_BIG: BitmapDrawable? = null
+    private var DEFAULT_COVER_GENRE_DRAWABLE_BIG: BitmapDrawable? = null
     private var DEFAULT_COVER_MOVIE_DRAWABLE_BIG: BitmapDrawable? = null
     private var DEFAULT_COVER_TVSHOW_DRAWABLE_BIG: BitmapDrawable? = null
     private var DEFAULT_COVER_FOLDER_DRAWABLE_BIG: BitmapDrawable? = null
 
     private val sHandler = Handler(Looper.getMainLooper())
-    const val DELETE_DURATION = 3000
+    private const val DELETE_DURATION = 3000
 
     fun getDefaultVideoDrawable(context: Context): BitmapDrawable {
         if (DEFAULT_COVER_VIDEO_DRAWABLE == null) {
@@ -141,7 +154,7 @@ object UiTools {
 
     fun getDefaultFolderDrawable(context: Context): BitmapDrawable {
         if (DEFAULT_COVER_FOLDER_DRAWABLE == null) {
-            DEFAULT_COVER_FOLDER_DRAWABLE = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_menu_folder))
+            DEFAULT_COVER_FOLDER_DRAWABLE = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_folder))
         }
         return DEFAULT_COVER_FOLDER_DRAWABLE!!
     }
@@ -160,6 +173,20 @@ object UiTools {
         return DEFAULT_COVER_ARTIST_DRAWABLE!!
     }
 
+    fun getDefaultPlaylistDrawable(context: Context): BitmapDrawable {
+        if (DEFAULT_COVER_PLAYLIST_DRAWABLE == null) {
+            DEFAULT_COVER_PLAYLIST_DRAWABLE = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_playlist))
+        }
+        return DEFAULT_COVER_PLAYLIST_DRAWABLE!!
+    }
+
+    fun getDefaultGenreDrawable(context: Context): BitmapDrawable {
+        if (DEFAULT_COVER_GENRE_DRAWABLE == null) {
+            DEFAULT_COVER_GENRE_DRAWABLE = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_genre))
+        }
+        return DEFAULT_COVER_GENRE_DRAWABLE!!
+    }
+
     fun getDefaultMovieDrawable(context: Context): BitmapDrawable {
         if (DEFAULT_COVER_MOVIE_DRAWABLE == null) {
             DEFAULT_COVER_MOVIE_DRAWABLE = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_browser_movie))
@@ -176,7 +203,7 @@ object UiTools {
 
     fun getDefaultVideoDrawableBig(context: Context): BitmapDrawable {
         if (DEFAULT_COVER_VIDEO_DRAWABLE_BIG == null) {
-            DEFAULT_COVER_VIDEO_DRAWABLE_BIG = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_browser_video_big_normal))
+            DEFAULT_COVER_VIDEO_DRAWABLE_BIG = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_video_big))
         }
         return DEFAULT_COVER_VIDEO_DRAWABLE_BIG!!
     }
@@ -202,6 +229,20 @@ object UiTools {
         return DEFAULT_COVER_ARTIST_DRAWABLE_BIG!!
     }
 
+    fun getDefaultPlaylistDrawableBig(context: Context): BitmapDrawable {
+        if (DEFAULT_COVER_PLAYLIST_DRAWABLE_BIG == null) {
+            DEFAULT_COVER_PLAYLIST_DRAWABLE_BIG = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_playlist_big))
+        }
+        return DEFAULT_COVER_PLAYLIST_DRAWABLE_BIG!!
+    }
+
+    fun getDefaultGenreDrawableBig(context: Context): BitmapDrawable {
+        if (DEFAULT_COVER_GENRE_DRAWABLE_BIG == null) {
+            DEFAULT_COVER_GENRE_DRAWABLE_BIG = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_genre_big))
+        }
+        return DEFAULT_COVER_GENRE_DRAWABLE_BIG!!
+    }
+
     fun getDefaultMovieDrawableBig(context: Context): BitmapDrawable {
         if (DEFAULT_COVER_MOVIE_DRAWABLE_BIG == null) {
             DEFAULT_COVER_MOVIE_DRAWABLE_BIG = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_browser_movie_big))
@@ -218,7 +259,7 @@ object UiTools {
 
     fun getDefaultFolderDrawableBig(context: Context): BitmapDrawable {
         if (DEFAULT_COVER_FOLDER_DRAWABLE_BIG == null) {
-            DEFAULT_COVER_FOLDER_DRAWABLE_BIG = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_menu_folder_big))
+            DEFAULT_COVER_FOLDER_DRAWABLE_BIG = BitmapDrawable(context.resources, getBitmapFromDrawable(context, R.drawable.ic_folder_big))
         }
         return DEFAULT_COVER_FOLDER_DRAWABLE_BIG!!
     }
@@ -406,7 +447,7 @@ object UiTools {
         v.findViewById<View>(R.id.about_vlc_card).setOnClickListener {
            var licenseText = ""
             activity.lifecycleScope.launchWhenStarted {
-                licenseText = AppContextProvider.appContext.assets.open("vlc_license.txt").bufferedReader().use {
+                licenseText = AppContextProvider.appResources.openRawResource(R.raw.vlc_license).bufferedReader().use {
                    it.readText()
                }
             }
@@ -434,7 +475,7 @@ object UiTools {
         val inputMethodManager = v.context.applicationContext.getSystemService(Activity.INPUT_METHOD_SERVICE) as InputMethodManager
         sHandler.post {
             if (show)
-                inputMethodManager.showSoftInput(v, InputMethodManager.SHOW_FORCED)
+                inputMethodManager.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
             else
                 inputMethodManager.hideSoftInputFromWindow(v.windowToken, 0)
         }
@@ -459,6 +500,29 @@ object UiTools {
         savePlaylistDialog.show(supportFragmentManager, "fragment_add_to_playlist")
     }
 
+    /**
+     * Display a restricted access snack bar if needed
+     *
+     * @return has the access been blocked
+     */
+    fun FragmentActivity.showPinIfNeeded():Boolean {
+        if (Settings.safeMode && PinCodeDelegate.pinUnlocked.value != true) {
+            if (Settings.tvUI) {
+                lifecycleScope.launch {
+                    if (checkPIN(true)) {
+                        snacker(this@showPinIfNeeded, R.string.pin_code_access_granted, false)
+                    }
+                }
+            } else {
+                snackerConfirm(this, getString(R.string.restricted_access), false, R.string.unlock) {
+                    lifecycleScope.launch { checkPIN(true) }
+                }
+            }
+            return true
+        }
+        return false
+    }
+
     fun FragmentActivity.addToGroup(tracks: List<MediaWrapper>, forbidNewGroup:Boolean , newGroupListener: ()->Unit) {
         if (!isStarted()) return
         val addToGroupDialog = AddToGroupDialog()
@@ -471,6 +535,7 @@ object UiTools {
      * Creates a shortcut to the media on the launcher
      * @param mediaLibraryItem: the [MediaLibraryItem] to create a shortcut to
      */
+    @RequiresApi(Build.VERSION_CODES.M)
     suspend fun FragmentActivity.createShortcut(mediaLibraryItem: MediaLibraryItem) {
         if (!isStarted()) return
 
@@ -539,7 +604,40 @@ object UiTools {
         }
     }
 
-    @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR1)
+    /**
+     * Set a blur effect on the whole [ImageView] using [RenderEffect]
+     * with a fallback on [RenderScript] if needed
+     *
+     * @param imageView the [ImageView] to blur
+     * @param bitmap the [Bitmap] to display
+     * @param radius the blur radius
+     * @param colorFilter the color filter to be used on the view depending on the theme
+     */
+    suspend fun blurView(imageView: ImageView, bitmap: Bitmap?, radius: Float, colorFilter: Int) {
+        imageView.setColorFilter(colorFilter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val blur = RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
+            imageView.setRenderEffect(blur)
+            imageView.setImageBitmap(bitmap)
+        } else {
+            val blurred = withContext(Dispatchers.IO) {
+                blurBitmap(bitmap, radius)
+            }
+            withContext(Dispatchers.Main) {
+                imageView.setImageBitmap(blurred)
+            }
+        }
+    }
+
+    /**
+     * Blur a [Bitmap]. it uses a deprecated API and therefore should not be used
+     * except for a fallback for API < 31
+     *
+     * @param bitmap the [Bitmap] to blur
+     * @param radius the bur radius
+     * @return a blurred bitmap
+     */
+    @Suppress("DEPRECATION")
     @JvmOverloads
     fun blurBitmap(bitmap: Bitmap?, radius: Float = 15.0f): Bitmap? {
         if (bitmap == null || bitmap.config == null) return null
@@ -585,9 +683,9 @@ object UiTools {
         menu.appendSortOrder(provider.context, R.id.ml_menu_sortby_artist_name, R.string.sortby_artist_name, sort == Medialibrary.SORT_ARTIST, desc)
         menu.appendSortOrder(provider.context, R.id.ml_menu_sortby_album_name, R.string.sortby_album_name, sort == Medialibrary.SORT_ALBUM, desc)
         menu.appendSortOrder(provider.context, R.id.ml_menu_sortby_length, R.string.sortby_length, sort == Medialibrary.SORT_DURATION, desc)
-        menu.appendSortOrder(provider.context, R.id.ml_menu_sortby_date, R.string.sortby_date, sort == Medialibrary.SORT_RELEASEDATE, desc)
-        menu.appendSortOrder(provider.context,R.id.ml_menu_sortby_last_modified, R.string.sortby_last_modified_date, sort == Medialibrary.SORT_LASTMODIFICATIONDATE, desc)
-        menu.appendSortOrder(provider.context,R.id.ml_menu_sortby_insertion_date, R.string.sortby_insertion, sort == Medialibrary.SORT_INSERTIONDATE, desc)
+        menu.appendSortOrder(provider.context, R.id.ml_menu_sortby_date, R.string.sortby_date_release, sort == Medialibrary.SORT_RELEASEDATE, desc)
+        menu.appendSortOrder(provider.context,R.id.ml_menu_sortby_last_modified, R.string.sortby_date_last_modified, sort == Medialibrary.SORT_LASTMODIFICATIONDATE, desc)
+        menu.appendSortOrder(provider.context,R.id.ml_menu_sortby_insertion_date, R.string.sortby_date_insertion, sort == Medialibrary.SORT_INSERTIONDATE, desc)
         //        item = menu.findItem(R.id.ml_menu_sortby_number); TODO sort by track number
         //        if (item != null) item.setTitle(sort == Medialibrary.SORT_ && !desc ? R.string.sortby_number_desc : R.string.sortby_number);
 
@@ -603,8 +701,8 @@ object UiTools {
         menu.appendSortOrder(sortable.requireActivity(), R.id.ml_menu_sortby_artist_name, R.string.sortby_artist_name, sort == Medialibrary.SORT_ARTIST, desc)
         menu.appendSortOrder(sortable.requireActivity(), R.id.ml_menu_sortby_album_name, R.string.sortby_album_name, sort == Medialibrary.SORT_ALBUM, desc)
         menu.appendSortOrder(sortable.requireActivity(), R.id.ml_menu_sortby_length, R.string.sortby_length, sort == Medialibrary.SORT_DURATION, desc)
-        menu.appendSortOrder(sortable.requireActivity(), R.id.ml_menu_sortby_date, R.string.sortby_date, sort == Medialibrary.SORT_RELEASEDATE, desc)
-        menu.appendSortOrder(sortable.requireActivity(),R.id.ml_menu_sortby_last_modified, R.string.sortby_last_modified_date, sort == Medialibrary.SORT_RELEASEDATE, desc)
+        menu.appendSortOrder(sortable.requireActivity(), R.id.ml_menu_sortby_date, R.string.sortby_date_release, sort == Medialibrary.SORT_RELEASEDATE, desc)
+        menu.appendSortOrder(sortable.requireActivity(),R.id.ml_menu_sortby_last_modified, R.string.sortby_date_last_modified, sort == Medialibrary.SORT_RELEASEDATE, desc)
         //        item = menu.findItem(R.id.ml_menu_sortby_number); TODO sort by track number
         //        if (item != null) item.setTitle(sort == Medialibrary.SORT_ && !desc ? R.string.sortby_number_desc : R.string.sortby_number);
 
@@ -701,7 +799,7 @@ object UiTools {
         if (!AndroidUtil.isJellyBeanMR2OrLater) return
         val win = activity.window
         val winParams = win.attributes
-        winParams.rotationAnimation = if (AndroidUtil.isOOrLater) WindowManager.LayoutParams.ROTATION_ANIMATION_SEAMLESS else WindowManager.LayoutParams.ROTATION_ANIMATION_JUMPCUT
+        winParams.rotationAnimation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.ROTATION_ANIMATION_SEAMLESS else WindowManager.LayoutParams.ROTATION_ANIMATION_JUMPCUT
         win.attributes = winParams
     }
 
@@ -742,6 +840,15 @@ object UiTools {
         DEFAULT_COVER_VIDEO_DRAWABLE = null
     }
 
+    fun TextView.addFavoritesIcon() {
+        val drawable = ContextCompat.getDrawable(context, R.drawable.ic_emoji_favorite)
+        setCompoundDrawablesWithIntrinsicBounds(null, null, drawable, null)
+    }
+
+    fun TextView.removeDrawables() {
+        setCompoundDrawablesWithIntrinsicBounds(null, null, null, null)
+    }
+
 }
 
 /**
@@ -751,8 +858,8 @@ object UiTools {
  *
  * See @array/list_title_alignment_values
  *
- * @param alignMode Align mode as read from preferences
  * @param t         Reference to the textview
+ * @param activated is the ellipsize mode activated
  */
 @BindingAdapter("ellipsizeMode")
 fun setEllipsizeModeByPref(t: TextView, activated: Boolean) {
@@ -774,42 +881,35 @@ interface MarqueeViewHolder {
     val titleView: TextView?
 }
 
-fun enableMarqueeEffect(recyclerView: RecyclerView, handler: Handler) {
+const val MARQUEE_ACTION = "marquee_action"
+fun enableMarqueeEffect(recyclerView: RecyclerView):LifecycleAwareScheduler? {
     (recyclerView.layoutManager as? LinearLayoutManager)?.let { layoutManager ->
+        val scheduler = LifecycleAwareScheduler(object :SchedulerCallback {
+            override fun onTaskTriggered(id: String, data: Bundle) {
+                val firstVisibleItemPosition = layoutManager.findFirstVisibleItemPosition()
+                val lastVisibleItemPosition = layoutManager.findLastVisibleItemPosition()
+                for (i in firstVisibleItemPosition..lastVisibleItemPosition) {
+                    val holder = recyclerView.findViewHolderForLayoutPosition(i)
+                    (holder as? MarqueeViewHolder)?.titleView?.isSelected = true
+                }
+            }
+
+            override val lifecycle: Lifecycle
+                get() = recyclerView.findViewTreeLifecycleOwner()!!.lifecycle
+        })
         //Initial animation for already visible items
-        launchMarquee(recyclerView, layoutManager, handler)
+        scheduler.scheduleAction(MARQUEE_ACTION, 1500)
         //Animation when done scrolling
         recyclerView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
                 super.onScrollStateChanged(recyclerView, newState)
-                handler.removeCallbacksAndMessages(null)
-                if (newState == RecyclerView.SCROLL_STATE_IDLE) launchMarquee(recyclerView, layoutManager, handler)
+                scheduler.cancelAction(MARQUEE_ACTION)
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) scheduler.scheduleAction(MARQUEE_ACTION, 1500)
             }
         })
+        return scheduler
     }
-}
-
-private fun launchMarquee(recyclerView: RecyclerView, layoutManager: LinearLayoutManager, handler: Handler) {
-    handler.postDelayed({
-        val firstVisibleItemPosition = layoutManager.findFirstVisibleItemPosition()
-        val lastVisibleItemPosition = layoutManager.findLastVisibleItemPosition()
-        for (i in firstVisibleItemPosition..lastVisibleItemPosition) {
-            val holder = recyclerView.findViewHolderForLayoutPosition(i)
-            (holder as? MarqueeViewHolder)?.titleView?.isSelected = true
-        }
-    }, 1500)
-}
-
-/**
- * sets the touch listener for a view
- *
- * @param view            the view
- * @param onTouchListener the listener
- */
-@BindingAdapter("touchListener")
-fun setTouchListener(view: View, onTouchListener: View.OnTouchListener?) {
-    if (onTouchListener != null)
-        view.setOnTouchListener(onTouchListener)
+    return null
 }
 
 @BindingAdapter("selected")
@@ -851,34 +951,35 @@ fun getTvIconRes(mediaLibraryItem: MediaLibraryItem) = when (mediaLibraryItem.it
     MediaLibraryItem.TYPE_MEDIA -> {
         val mw = mediaLibraryItem as MediaWrapper
         when (mw.type) {
-            MediaWrapper.TYPE_VIDEO -> R.drawable.ic_browser_video_big_normal
-            MediaWrapper.TYPE_DIR -> if (mw.uri.scheme == "file") R.drawable.ic_menu_folder_big else R.drawable.ic_menu_network_big
+            MediaWrapper.TYPE_VIDEO -> R.drawable.ic_video_big
+            MediaWrapper.TYPE_DIR -> if (mw.uri.scheme == "file") R.drawable.ic_folder_big else R.drawable.ic_network_big
             MediaWrapper.TYPE_AUDIO -> R.drawable.ic_song_big
-            else -> R.drawable.ic_browser_unknown_big_normal
+            else -> R.drawable.ic_unknown_big
         }
     }
     MediaLibraryItem.TYPE_DUMMY -> {
         when (mediaLibraryItem.id) {
-            HEADER_VIDEO -> R.drawable.ic_video_collection_big
+            HEADER_VIDEO -> R.drawable.ic_video_big
             HEADER_PERMISSION -> R.drawable.ic_permission_big
-            HEADER_DIRECTORIES -> R.drawable.ic_menu_folder_big
-            HEADER_NETWORK -> R.drawable.ic_menu_network_big
-            HEADER_SERVER -> R.drawable.ic_menu_network_add_big
-            HEADER_STREAM -> R.drawable.ic_menu_stream_big
-            HEADER_PLAYLISTS -> R.drawable.ic_menu_playlist_big
+            HEADER_DIRECTORIES -> R.drawable.ic_folder_big
+            HEADER_NETWORK -> R.drawable.ic_network_big
+            HEADER_SERVER -> R.drawable.ic_network_add_big
+            HEADER_STREAM -> R.drawable.ic_stream_big
+            HEADER_PLAYLISTS -> R.drawable.ic_playlist_big
             HEADER_MOVIES, CATEGORY_NOW_PLAYING_PIP -> R.drawable.ic_browser_movie_big
             HEADER_TV_SHOW -> R.drawable.ic_browser_tvshow_big
-            ID_SETTINGS -> R.drawable.ic_menu_preferences_big
+            ID_SETTINGS -> R.drawable.ic_settings_big
             ID_ABOUT_TV -> R.drawable.ic_default_cone
+            ID_REMOTE_ACCESS -> R.drawable.ic_remote_access_big
             ID_SPONSOR -> R.drawable.ic_donate_big
             CATEGORY_ARTISTS -> R.drawable.ic_artist_big
             CATEGORY_ALBUMS -> R.drawable.ic_album_big
             CATEGORY_GENRES -> R.drawable.ic_genre_big
             CATEGORY_SONGS, CATEGORY_NOW_PLAYING -> R.drawable.ic_song_big
-            else -> R.drawable.ic_browser_unknown_big_normal
+            else -> R.drawable.ic_unknown_big
         }
     }
-    else -> R.drawable.ic_browser_unknown_big_normal
+    else -> R.drawable.ic_unknown_big
 }
 
 suspend fun fillActionMode(context: Context, mode: ActionMode, multiSelectHelper: MultiSelectHelper<MediaLibraryItem>) {
@@ -912,6 +1013,6 @@ suspend fun fillActionMode(context: Context, mode: ActionMode, multiSelectHelper
     }
     if (ready) {
         mode.title = context.getString(R.string.selection_count, realCount)
-        mode.subtitle = "${ Tools.millisToString(length)}"
+        mode.subtitle = Tools.millisToString(length)
     }
 }

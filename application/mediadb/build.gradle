@@ -25,10 +25,9 @@
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-kapt'
-android {
-    compileSdkVersion rootProject.ext.compileSdkVersion
 
-    kotlinOptions.jvmTarget = "1.8"
+android {
+
     packagingOptions {
         jniLibs {
             pickFirsts += ['**/*.so']
@@ -39,6 +38,7 @@ android {
     defaultConfig {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
+        compileSdk rootProject.ext.compileSdkVersion
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles 'consumer-rules.pro'

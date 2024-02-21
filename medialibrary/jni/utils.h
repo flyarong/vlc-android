@@ -37,6 +37,8 @@
 #include<medialibrary/filesystem/IDevice.h>
 #include <medialibrary/IMediaGroup.h>
 #include <medialibrary/IBookmark.h>
+#include <medialibrary/IService.h>
+#include <medialibrary/ISubscription.h>
 #include <medialibrary/filesystem/Errors.h>
 
 #include <type_traits>
@@ -190,6 +192,12 @@ struct fields {
         jmethodID onEntryPointRemovedId;
         jmethodID onMediaThumbnailReadyId;
         jmethodID onUnhandledExceptionId;
+        jmethodID onSubscriptionsAddedId;
+        jmethodID onSubscriptionsModifiedId;
+        jmethodID onSubscriptionsDeleteId;
+        jmethodID onSubscriptionNewMediaId;
+        jmethodID onSubscriptionCacheUpdatedId;
+        jmethodID onSubscriptionIdleChangedId;
     } MediaLibrary;
     struct Album {
         jclass clazz;
@@ -231,17 +239,27 @@ struct fields {
         jclass clazz;
         jmethodID initID;
     } Bookmark;
+    struct Subscription {
+        jclass clazz;
+        jmethodID initID;
+    } Subscription;
+    struct Service {
+        jclass clazz;
+        jmethodID initID;
+    } Service;
 };
 
 utils::jni::object mediaToMediaWrapper(JNIEnv*, fields*, const medialibrary::MediaPtr &);
 utils::jni::object convertAlbumObject(JNIEnv* env, fields *fields, medialibrary::AlbumPtr const& albumPtr);
 utils::jni::object convertArtistObject(JNIEnv* env, fields *fields, medialibrary::ArtistPtr const& artistPtr);
 utils::jni::object convertGenreObject(JNIEnv* env, fields *fields, medialibrary::GenrePtr const& genrePtr);
-utils::jni::object convertPlaylistObject(JNIEnv* env, fields *fields, medialibrary::PlaylistPtr const& genrePtr, jboolean includeMissing);
+utils::jni::object convertPlaylistObject(JNIEnv* env, fields *fields, medialibrary::PlaylistPtr const& genrePtr, jboolean includeMissing, jboolean onlyFavorites);
 utils::jni::object convertFolderObject(JNIEnv* env, fields *fields, medialibrary::FolderPtr const& folderPtr, int count);
 utils::jni::object convertVideoGroupObject(JNIEnv* env, fields *fields, medialibrary::MediaGroupPtr const& videogroupPtr);
 utils::jni::object convertBookmarkObject(JNIEnv* env, fields *fields, medialibrary::BookmarkPtr const& bookmarkPtr);
-utils::jni::object convertSearchAggregateObject(JNIEnv* env, fields *fields, medialibrary::SearchAggregate const& searchAggregatePtr, jboolean includeMissing);
+utils::jni::object convertSearchAggregateObject(JNIEnv* env, fields *fields, medialibrary::SearchAggregate const& searchAggregatePtr, jboolean includeMissing, jboolean onlyFavorites);
+utils::jni::object convertSubscriptionObject(JNIEnv* env, fields *fields, medialibrary::SubscriptionPtr const& subsPtr);
+utils::jni::object convertServiceObject(JNIEnv* env, fields *fields, medialibrary::ServicePtr const& servicePtr);
 utils::jni::objectArray filteredArray(JNIEnv* env, utils::jni::objectArray array, jclass clazz, int removalCount = -1);
 utils::jni::longArray idArray(JNIEnv* env, std::set<int64_t> ids);
 utils::jni::string vlcNewStringUTF(JNIEnv* env, const char* psz_string);

@@ -43,9 +43,9 @@ import org.videolan.vlc.providers.BrowserProvider
 import org.videolan.vlc.repository.BrowserFavRepository
 import org.videolan.vlc.util.convertFavorites
 
-class BrowserFavoritesModel(private val context: Context) : ViewModel() {
+class BrowserFavoritesModel(context: Context) : ViewModel() {
     val favorites = LiveDataset<MediaLibraryItem>()
-    val provider = FavoritesProvider(context, favorites, viewModelScope)
+    val provider = FavoritesProvider(context.applicationContext, favorites, viewModelScope)
 }
 
 class FavoritesProvider(
@@ -59,6 +59,7 @@ class FavoritesProvider(
         browserFavRepository.browserFavorites
                 .onEach { list ->
                     convertFavorites(list.sortedWith(compareBy(BrowserFav::title, BrowserFav::type))).let {
+                        @Suppress("UNCHECKED_CAST")
                         dataset.postValue(it as MutableList<MediaLibraryItem>)
                         parseSubDirectories()
                     }

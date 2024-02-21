@@ -32,6 +32,7 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import org.videolan.medialibrary.interfaces.Medialibrary
 import org.videolan.medialibrary.interfaces.media.MediaWrapper
 import org.videolan.medialibrary.media.MediaLibraryItem
 import org.videolan.resources.KEY_AUDIO_LAST_PLAYLIST
@@ -62,6 +63,11 @@ class HistoryFragment : MediaBrowserFragment<HistoryModel>(), IRefreshable, IHis
     private lateinit var list: RecyclerView
     private lateinit var empty: TextView
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        viewModel = ViewModelProvider(requireActivity(), HistoryModel.Factory(requireContext()))[HistoryModel::class.java]
+    }
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
         return inflater.inflate(R.layout.history_list, container, false)
     }
@@ -70,7 +76,6 @@ class HistoryFragment : MediaBrowserFragment<HistoryModel>(), IRefreshable, IHis
         super.onViewCreated(view, savedInstanceState)
         list = view.findViewById(R.id.list)
         empty = view.findViewById(R.id.empty)
-        viewModel = ViewModelProvider(requireActivity(), HistoryModel.Factory(requireContext()))[HistoryModel::class.java]
         viewModel.dataset.observe(viewLifecycleOwner) { list ->
             list?.let {
                 historyAdapter.update(it)
@@ -89,15 +94,6 @@ class HistoryFragment : MediaBrowserFragment<HistoryModel>(), IRefreshable, IHis
             restoreMultiSelectHelper()
         }
         historyAdapter.events.onEach { it.process() }.launchWhenStarted(lifecycleScope)
-    }
-
-    override fun onStart() {
-        super.onStart()
-        viewModel.refresh()
-    }
-
-    override fun onActivityCreated(savedInstanceState: Bundle?) {
-        super.onActivityCreated(savedInstanceState)
         list.layoutManager = LinearLayoutManager(activity)
         list.adapter = historyAdapter
         list.nextFocusUpId = R.id.ml_menu_search
@@ -113,6 +109,12 @@ class HistoryFragment : MediaBrowserFragment<HistoryModel>(), IRefreshable, IHis
         registerForContextMenu(list)
         swipeRefreshLayout.setOnRefreshListener(this)
     }
+
+    override fun onStart() {
+        super.onStart()
+        viewModel.refresh()
+    }
+
 
     override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
         inflater.inflate(R.menu.fragment_option_history, menu)
@@ -156,6 +158,7 @@ class HistoryFragment : MediaBrowserFragment<HistoryModel>(), IRefreshable, IHis
         return getString(R.string.history)
     }
 
+    @Suppress("UNCHECKED_CAST")
     override fun getMultiHelper(): MultiSelectHelper<HistoryModel>? = historyAdapter.multiSelectHelper as? MultiSelectHelper<HistoryModel>
 
     override fun clear() {}
@@ -175,7 +178,7 @@ class HistoryFragment : MediaBrowserFragment<HistoryModel>(), IRefreshable, IHis
     }
 
     override fun clearHistory() {
-        mediaLibrary.clearHistory()
+        mediaLibrary.clearHistory(Medialibrary.HISTORY_TYPE_GLOBAL)
         viewModel.clearHistory()
         Settings.getInstance(requireActivity()).edit().remove(KEY_AUDIO_LAST_PLAYLIST).remove(KEY_MEDIA_LAST_PLAYLIST).apply()
     }
@@ -186,6 +189,7 @@ class HistoryFragment : MediaBrowserFragment<HistoryModel>(), IRefreshable, IHis
         return true
     }
 
+    @Suppress("UNCHECKED_CAST")
     override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
         val selectionCount = multiSelectHelper.getSelectionCount()
         if (selectionCount == 0) {

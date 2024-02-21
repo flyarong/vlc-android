@@ -19,11 +19,11 @@
 
 package org.videolan.vlc
 
-import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import android.app.*
 import android.appwidget.AppWidgetManager
 import android.content.*
+import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.media.AudioManager
 import android.media.audiofx.AudioEffect
@@ -41,6 +41,8 @@ import android.widget.Toast
 import androidx.annotation.MainThread
 import androidx.annotation.RequiresApi
 import androidx.annotation.StringRes
+import androidx.car.app.connection.CarConnection
+import androidx.car.app.notification.CarPendingIntent
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.edit
@@ -50,6 +52,7 @@ import androidx.lifecycle.*
 import androidx.lifecycle.Observer
 import androidx.media.MediaBrowserServiceCompat
 import androidx.media.session.MediaButtonReceiver
+import androidx.media.utils.MediaConstants
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
@@ -68,7 +71,10 @@ import org.videolan.resources.*
 import org.videolan.resources.util.VLCCrashHandler
 import org.videolan.resources.util.getFromMl
 import org.videolan.resources.util.launchForeground
+import org.videolan.resources.util.registerReceiverCompat
+import org.videolan.resources.util.startForegroundCompat
 import org.videolan.tools.*
+import org.videolan.vlc.car.VLCCarService
 import org.videolan.vlc.gui.dialogs.VideoTracksDialog
 import org.videolan.vlc.gui.dialogs.adapters.VlcTrack
 import org.videolan.vlc.gui.helpers.AudioUtil
@@ -88,13 +94,14 @@ import kotlin.math.abs
 
 private const val TAG = "VLC/PlaybackService"
 
-class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineScope {
+class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineScope, SchedulerCallback {
     override val coroutineContext = Dispatchers.IO + SupervisorJob()
+    lateinit var scheduler: LifecycleAwareScheduler
 
     private var position: Long = -1L
     private val dispatcher = ServiceLifecycleDispatcher(this)
 
-    internal var enabledActions = PLAYBACK_BASE_ACTIONS
+    internal var enabledActions = PlaybackAction.createBaseActions()
     lateinit var playlistManager: PlaylistManager
         private set
     val mediaplayer: MediaPlayer
@@ -108,11 +115,14 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     private val callbacks = mutableListOf<Callback>()
     private val subtitleMessage = ArrayDeque<String>(1)
     private lateinit var cbActor: SendChannel<CbAction>
-    private var detectHeadset = true
+    var detectHeadset = true
+    var headsetInserted = false
     private lateinit var wakeLock: PowerManager.WakeLock
     private val audioFocusHelper by lazy { VLCAudioFocusHelper(this) }
     private lateinit var browserCallback: MediaBrowserCallback
     var sleepTimerJob: Job? = null
+    var waitForMediaEnd = false
+    private var mediaEndReached = false
 
     // Playback management
     internal lateinit var mediaSession: MediaSessionCompat
@@ -127,6 +137,10 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     private var lastParentId = ""
     private var widget = 0
 
+    var currentToast: Toast? = null
+    var lastErrorTime = 0L
+    var nbErrors = 0
+
     /**
      * Last widget position update timestamp
      */
@@ -134,18 +148,19 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     private var popupManager: PopupManager? = null
 
     private val mediaFactory = FactoryManager.getFactory(IMediaFactory.factoryId) as IMediaFactory
-    private lateinit var carConnectionHandler:CarConnectionHandler
+    private lateinit var carConnection: CarConnection
+
+    /**
+     * Binds a [MediaBrowserCompat] to the service to allow receiving the
+     * [MediaSessionCompat.Callback] callbacks even if the service is killed
+     */
+    lateinit var mediaBrowserCompat:MediaBrowserCompat
 
     private val receiver = object : BroadcastReceiver() {
         private var wasPlaying = false
         override fun onReceive(context: Context, intent: Intent) {
             val action = intent.action ?: return
             val state = intent.getIntExtra("state", 0)
-
-            if (action == CarConnectionHandler.RECEIVER_ACTION) {
-                carConnectionHandler.query()
-                return
-            }
 
             // skip all headsets events if there is a call
             if ((context.getSystemService(AUDIO_SERVICE) as AudioManager).mode == AudioManager.MODE_IN_CALL) return
@@ -168,19 +183,18 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                 }
                 VLCAppWidgetProvider.ACTION_WIDGET_INIT -> updateWidget()
                 VLCAppWidgetProvider.ACTION_WIDGET_ENABLED, VLCAppWidgetProvider.ACTION_WIDGET_DISABLED -> updateHasWidget()
-                VLCAppWidgetProvider.ACTION_WIDGET_ENABLED, VLCAppWidgetProvider.ACTION_WIDGET_DISABLED -> updateHasWidget()
                 MiniPlayerAppWidgetProvider.ACTION_WIDGET_INIT -> updateWidget()
-                MiniPlayerAppWidgetProvider.ACTION_WIDGET_ENABLED, VLCAppWidgetProvider.ACTION_WIDGET_DISABLED -> updateHasWidget()
-                MiniPlayerAppWidgetProvider.ACTION_WIDGET_ENABLED, VLCAppWidgetProvider.ACTION_WIDGET_DISABLED -> updateHasWidget()
-                ACTION_CAR_MODE_EXIT -> MediaSessionBrowser.unbindExtensionConnection()
+                MiniPlayerAppWidgetProvider.ACTION_WIDGET_ENABLED, MiniPlayerAppWidgetProvider.ACTION_WIDGET_DISABLED -> updateHasWidget()
                 AudioManager.ACTION_AUDIO_BECOMING_NOISY -> if (detectHeadset) {
                     if (BuildConfig.DEBUG) Log.i(TAG, "Becoming noisy")
+                    headsetInserted = false
                     wasPlaying = isPlaying
                     if (wasPlaying && playlistManager.hasCurrentMedia())
                         pause()
                 }
                 Intent.ACTION_HEADSET_PLUG -> if (detectHeadset && state != 0) {
                     if (BuildConfig.DEBUG) Log.i(TAG, "Headset Inserted.")
+                    headsetInserted = true
                     if (wasPlaying && playlistManager.hasCurrentMedia() && settings.getBoolean("enable_play_on_headset_insertion", false))
                         play()
                 }
@@ -199,7 +213,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                 audioFocusHelper.changeAudioFocus(true)
                 if (!wakeLock.isHeld) wakeLock.acquire()
                 showNotification()
-                handler.nbErrors = 0
+                nbErrors = 0
             }
             MediaPlayer.Event.Paused -> {
                 if (BuildConfig.DEBUG) Log.i(TAG, "MediaPlayer.Event.Paused")
@@ -231,11 +245,10 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                 updateMetadata()
             }
             MediaPlayer.Event.MediaChanged -> if (BuildConfig.DEBUG) Log.d(TAG, "onEvent: MediaChanged")
+            MediaPlayer.Event.EndReached -> mediaEndReached = true
         }
         cbActor.trySend(CbMediaPlayerEvent(event))
     }
-
-    private val handler = PlaybackServiceHandler(this)
 
     val sessionPendingIntent: PendingIntent
         get() {
@@ -263,7 +276,11 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     val isPodcastMode: Boolean
         @MainThread
-        get() = playlistManager.getMediaListSize() == 1 && playlistManager.getCurrentMedia()?.isPodcast == true
+        get() = playlistManager.getMediaListSize() == 1 && isPodcastPlaying
+
+    val isPodcastPlaying: Boolean
+        @MainThread
+        get() = playlistManager.getCurrentMedia()?.isPodcast == true
 
     val speed: Float
         @MainThread
@@ -280,6 +297,10 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     val isPausable: Boolean
         @MainThread
         get() = playlistManager.player.pausable
+
+    val isPaused: Boolean
+        @MainThread
+        get() = playlistManager.player.isPaused()
 
     val isShuffling: Boolean
         @MainThread
@@ -300,7 +321,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     var repeatType: Int
         @MainThread
-        get() = playlistManager.repeating
+        get() = PlaylistManager.repeating.value
         @MainThread
         set(repeatType) {
             playlistManager.setRepeatType(if (repeatType == PlaybackStateCompat.REPEAT_MODE_GROUP) PlaybackStateCompat.REPEAT_MODE_ALL else repeatType)
@@ -395,12 +416,13 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
             return next?.artworkMrl
         }
 
-    suspend fun getCurrentChapter(formatted: Boolean = false): String? {
-        val currentChapter = withContext(Dispatchers.IO) {
-            val chapters = getChapters(-1)
-            if (chapters?.size ?: 0 > 0 && chapterIdx >= 0) chapters?.get(chapterIdx)?.name else null
+    fun getCurrentChapter(): String? {
+        return getChapters(-1)?.let { chapters ->
+            val curChapter = chapterIdx
+            if (curChapter >= 0 && chapters.isNotEmpty()) {
+                TextUtils.formatChapterTitle(this, curChapter + 1, chapters[curChapter].name)
+            } else null
         }
-        return if (currentChapter == null) null else if (formatted) TextUtils.formatChapterTitle(this, currentChapter) else currentChapter
     }
 
     suspend fun trackInfo(): String? {
@@ -550,7 +572,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     val spuTrack: String
         @MainThread
-        get() = playlistManager.player.getSpuTrack() ?: "-1"
+        get() = playlistManager.player.getSpuTrack()
 
     val spuTracksCount: Int
         @MainThread
@@ -585,6 +607,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate() {
+        scheduler = LifecycleAwareScheduler(this)
         dispatcher.onServicePreSuperOnCreate()
         setupScope()
         forceForeground()
@@ -625,15 +648,13 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
             addAction(MiniPlayerAppWidgetProvider.ACTION_WIDGET_DISABLED)
             addAction(Intent.ACTION_HEADSET_PLUG)
             addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
-            if (CarConnectionHandler.preferCarConnectionHandler()) addAction(CarConnectionHandler.RECEIVER_ACTION)
-            addAction(ACTION_CAR_MODE_EXIT)
             addAction(CUSTOM_ACTION)
         }
-        registerReceiver(receiver, filter)
-        if (CarConnectionHandler.preferCarConnectionHandler()) {
-            carConnectionHandler = CarConnectionHandler(contentResolver)
-            carConnectionHandler.connectionType.observeForever {
-                if (it != null) publishState()
+        registerReceiverCompat(receiver, filter, false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            carConnection = CarConnection(this)
+            carConnection.type.observeForever {
+                if (it != null) executeUpdate(true)
             }
         }
 
@@ -643,6 +664,8 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
         headSetDetection.observe(this, Observer { detectHeadset(it) })
         equalizer.observe(this, Observer { setEqualizer(it) })
         serviceFlow.value = this
+        mediaBrowserCompat = MediaBrowserInstance.getInstance(this)
+        PlaylistManager.playingState.value = true
     }
 
     @OptIn(ObsoleteCoroutinesApi::class)
@@ -657,6 +680,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                 ShowNotification -> showNotificationInternal()
                 is HideNotification -> hideNotificationInternal(update.remove)
                 UpdateMeta -> updateMetadataInternal()
+                UpdateState -> executeUpdate(true)
             }
         }
     }
@@ -717,8 +741,8 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     override fun onDestroy() {
         serviceFlow.value = null
         dispatcher.onServicePreSuperOnDestroy()
+        PlaylistManager.playingState.value = false
         super.onDestroy()
-        handler.removeCallbacksAndMessages(null)
         browserCallback.removeCallbacks()
         if (!settings.getBoolean(AUDIO_RESUME_PLAYBACK, true)) (getSystemService(NOTIFICATION_SERVICE)as NotificationManager).cancel(3)
         if (this::mediaSession.isInitialized) mediaSession.release()
@@ -755,7 +779,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                     ctx.resources.getString(R.string.loading), "", "", null, false, true,
                     true, speed, isPodcastMode, false, enabledActions, null, pi)
         }
-        startForeground(3, notification)
+        startForegroundCompat(3, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         isForeground = true
         if (stopped) lifecycleScope.launch { hideNotification(true) }
     }
@@ -823,38 +847,6 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
             publishState()
     }
 
-    private class PlaybackServiceHandler(owner: PlaybackService) : WeakHandler<PlaybackService>(owner) {
-
-        var currentToast: Toast? = null
-        var lastErrorTime = 0L
-        var nbErrors = 0
-
-        @SuppressLint("ShowToast")
-        override fun handleMessage(msg: Message) {
-            val service = owner ?: return
-            when (msg.what) {
-                SHOW_TOAST -> {
-                    val bundle = msg.data
-                    var text = bundle.getString("text")
-                    val duration = bundle.getInt("duration")
-                    val isError = bundle.getBoolean("isError")
-                    if (isError) {
-                        when {
-                            nbErrors > 2 && System.currentTimeMillis() - lastErrorTime < 500 -> return
-                            nbErrors >= 2 -> text = service.getString(R.string.playback_multiple_errors)
-                        }
-                        currentToast?.cancel()
-                        nbErrors++
-                        lastErrorTime = System.currentTimeMillis()
-                    }
-                    currentToast = Toast.makeText(AppContextProvider.appContext, text, duration)
-                    currentToast?.show()
-                }
-                END_MEDIASESSION -> if (service::mediaSession.isInitialized) service.mediaSession.isActive = false
-            }
-        }
-    }
-
     fun showNotification(): Boolean {
         notificationShowing = true
         return cbActor.trySend(ShowNotification).isSuccess
@@ -873,7 +865,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
             val seekInCompactView = settings.getBoolean(SHOW_SEEK_IN_COMPACT_NOTIFICATION, false)
             val playing = isPlaying
             val sessionToken = mediaSession.sessionToken
-            val ctx = this
+            val ctx = this@PlaybackService
             val metaData = mediaSession.controller.metadata
             lifecycleScope.launch(Dispatchers.Default) {
                 delay(100)
@@ -896,13 +888,15 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                     if (isPlayingPopup) return@launch
                     if (!AndroidUtil.isLolliPopOrLater || playing || audioFocusHelper.lossTransient) {
                         if (!isForeground) {
-                            this@PlaybackService.startForeground(3, notification)
-                            isForeground = true
+                            ctx.launchForeground(Intent(ctx, PlaybackService::class.java)) {
+                                startForegroundCompat(3, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                                isForeground = true
+                            }
                         } else
                             NotificationManagerCompat.from(ctx).notify(3, notification)
                     } else {
                         if (isForeground) {
-                            ServiceCompat.stopForeground(this@PlaybackService, ServiceCompat.STOP_FOREGROUND_DETACH)
+                            ServiceCompat.stopForeground(ctx, ServiceCompat.STOP_FOREGROUND_DETACH)
                             isForeground = false
                         }
                         NotificationManagerCompat.from(ctx).notify(3, notification)
@@ -962,13 +956,10 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     }
 
     private fun initMediaSession() {
-        val mediaButtonIntent = Intent(Intent.ACTION_MEDIA_BUTTON)
-
-        mediaButtonIntent.setClass(this, MediaButtonReceiver::class.java)
-        val mbrIntent = PendingIntent.getBroadcast(this, 0, mediaButtonIntent, PendingIntent.FLAG_IMMUTABLE)
+        val mbrIntent = MediaButtonReceiver.buildMediaButtonPendingIntent(this, PlaybackStateCompat.ACTION_PLAY_PAUSE)
         val mbrName = ComponentName(this, MediaButtonReceiver::class.java)
         val playbackState = PlaybackStateCompat.Builder()
-                .setActions(enabledActions)
+                .setActions(enabledActions.getCapabilities())
                 .setState(PlaybackStateCompat.STATE_NONE, 0, 0f)
                 .build()
         mediaSession = MediaSessionCompat(this, "VLC", mbrName, mbrIntent).apply {
@@ -998,10 +989,10 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     private suspend fun updateMetadataInternal() {
         val media = playlistManager.getCurrentMedia() ?: return
         if (!this::mediaSession.isInitialized) initMediaSession()
-        val ctx = this
+        val ctx = this@PlaybackService
         val length = length
         lastLength = length
-        val chapterTitle = if (lastChaptersCount > 0) getCurrentChapter(true) else null
+        val chapterTitle = if (lastChaptersCount > 0) getCurrentChapter() else null
         val displayMsg = subtitleMessage.poll()
         val bob = withContext(Dispatchers.Default) {
             val carMode = isCarMode()
@@ -1023,7 +1014,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                         ?: MediaUtils.getDisplaySubtitle(ctx, media, currentMediaPosition, mediaListSize))
                 bob.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, MediaUtils.getMediaAlbum(ctx, media))
             }
-            if (Permissions.canReadStorage(this@PlaybackService) && coverOnLockscreen) {
+            if (Permissions.canReadStorage(ctx) && coverOnLockscreen) {
                 val albumArtUri = when {
                     isSchemeHttpOrHttps(media.artworkMrl) -> {
                         //ArtworkProvider will cache remote images
@@ -1056,17 +1047,17 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     private fun publishState(position: Long? = null) {
         if (!this::mediaSession.isInitialized) return
-        if (AndroidDevices.isAndroidTv) handler.removeMessages(END_MEDIASESSION)
+        if (AndroidDevices.isAndroidTv) scheduler.cancelAction(END_MEDIASESSION)
         val pscb = PlaybackStateCompat.Builder()
-        var actions = PLAYBACK_BASE_ACTIONS
+        var actions = PlaybackAction.createActivePlaybackActions()
         val hasMedia = playlistManager.hasCurrentMedia()
         var time = position ?: getTime()
         var state = PlayerController.playbackState
         when (state) {
-            PlaybackStateCompat.STATE_PLAYING -> actions = actions or (PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_STOP)
-            PlaybackStateCompat.STATE_PAUSED -> actions = actions or (PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_STOP)
+            PlaybackStateCompat.STATE_PLAYING -> actions.addAll(PlaybackAction.ACTION_PAUSE, PlaybackAction.ACTION_STOP)
+            PlaybackStateCompat.STATE_PAUSED -> actions.addAll(PlaybackAction.ACTION_PLAY, PlaybackAction.ACTION_STOP)
             else -> {
-                actions = actions or PlaybackStateCompat.ACTION_PLAY
+                actions.add(PlaybackAction.ACTION_PLAY)
                 val media = if (AndroidDevices.isAndroidTv && !AndroidUtil.isOOrLater && hasMedia) playlistManager.getCurrentMedia() else null
                 if (media != null) { // Hack to show a now paying card on Android TV
                     val length = media.length
@@ -1074,19 +1065,19 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                     val progress = if (length <= 0L) 0f else time / length.toFloat()
                     if (progress < 0.95f) {
                         state = PlaybackStateCompat.STATE_PAUSED
-                        handler.sendEmptyMessageDelayed(END_MEDIASESSION, 900_000L)
+                        scheduler.scheduleAction(END_MEDIASESSION, 900_000L)
                     }
                 }
             }
         }
-        pscb.setState(state, time, playlistManager.player.getRate())
+        pscb.setState(state, time, if (isPaused) 0f else playlistManager.player.getRate())
         pscb.setActiveQueueItemId(playlistManager.currentIndex.toLong())
-        val repeatType = playlistManager.repeating
-        val podcastMode = playlistManager.getMediaListSize() == 1 && playlistManager.getCurrentMedia()?.isPodcast == true
+        val repeatType = PlaylistManager.repeating.value
+        val podcastMode = isPodcastMode
         if (repeatType != PlaybackStateCompat.REPEAT_MODE_NONE || hasNext())
-            actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+            actions.add(PlaybackAction.ACTION_SKIP_TO_NEXT)
         if (repeatType != PlaybackStateCompat.REPEAT_MODE_NONE || hasPrevious() || (isSeekable && !podcastMode))
-            actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+            actions.add(PlaybackAction.ACTION_SKIP_TO_PREVIOUS)
 
         when {
             podcastMode -> {
@@ -1098,15 +1089,14 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
                 if (!isCarMode()) {
                     addCustomSeekActions(pscb)
                 } else {
-                    actions = manageAutoActions(actions, pscb, repeatType)
+                    manageAutoActions(actions, pscb, repeatType)
                 }
             }
             else -> {
-                actions = manageAutoActions(actions, pscb, repeatType)
+                manageAutoActions(actions, pscb, repeatType)
             }
         }
-        actions = actions or PlaybackStateCompat.ACTION_FAST_FORWARD or PlaybackStateCompat.ACTION_REWIND or PlaybackStateCompat.ACTION_SEEK_TO
-        pscb.setActions(actions)
+        pscb.setActions(actions.getCapabilities())
         mediaSession.setRepeatMode(repeatType)
         mediaSession.setShuffleMode(if (isShuffling) PlaybackStateCompat.SHUFFLE_MODE_ALL else PlaybackStateCompat.SHUFFLE_MODE_NONE)
         mediaSession.setExtras(Bundle().apply {
@@ -1115,6 +1105,11 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
             putBoolean(PLAYBACK_SLOT_RESERVATION_SKIP_TO_NEXT, !podcastMode)
             putBoolean(PLAYBACK_SLOT_RESERVATION_SKIP_TO_PREV, !podcastMode)
         })
+        currentMediaWrapper?.takeIf { it.id != 0L }?.let { mw ->
+            pscb.setExtras(Bundle().apply {
+                putString(MediaConstants.PLAYBACK_STATE_EXTRAS_KEY_MEDIA_ID, MediaSessionBrowser.generateMediaId(mw))
+            })
+        }
         val mediaIsActive = state != PlaybackStateCompat.STATE_STOPPED
         val update = mediaSession.isActive != mediaIsActive
         updateMediaQueueSlidingWindow()
@@ -1128,12 +1123,11 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
         }
     }
 
-    private fun manageAutoActions(actions: Long, pscb: PlaybackStateCompat.Builder, repeatType: Int): Long {
-        var resultActions = actions
+    private fun manageAutoActions(actions: FlagSet<PlaybackAction>, pscb: PlaybackStateCompat.Builder, repeatType: Int) {
         if (playlistManager.canRepeat())
-            resultActions = resultActions or PlaybackStateCompat.ACTION_SET_REPEAT_MODE
+            actions.add(PlaybackAction.ACTION_SET_REPEAT_MODE)
         if (playlistManager.canShuffle())
-            resultActions = resultActions or PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE
+            actions.add(PlaybackAction.ACTION_SET_SHUFFLE_MODE)
         /* Always add the icons, regardless of the allowed actions */
         val shuffleResId = when {
             isShuffling -> R.drawable.ic_auto_shuffle_enabled
@@ -1146,9 +1140,8 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
             else -> R.drawable.ic_auto_repeat_normal
         }
         pscb.addCustomAction(CUSTOM_ACTION_REPEAT, getString(R.string.repeat_title), repeatResId)
-        addCustomSpeedActions(pscb, settings.getBoolean("enable_android_auto_speed_buttons", false))
-        addCustomSeekActions(pscb, settings.getBoolean("enable_android_auto_seek_buttons", false))
-        return resultActions
+        addCustomSpeedActions(pscb, settings.getBoolean(ENABLE_ANDROID_AUTO_SPEED_BUTTONS, false))
+        addCustomSeekActions(pscb, settings.getBoolean(ENABLE_ANDROID_AUTO_SEEK_BUTTONS, false))
     }
 
     private fun addCustomSeekActions(pscb: PlaybackStateCompat.Builder, showSeekActions: Boolean = true) {
@@ -1221,7 +1214,6 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     }
 
     fun updateWidgetState() {
-        val media = playlistManager.getCurrentMedia()
         val widgetIntents = arrayOf(Intent(VLCAppWidgetProvider.ACTION_WIDGET_UPDATE), Intent(MiniPlayerAppWidgetProvider.ACTION_WIDGET_UPDATE))
         lifecycleScope.launch(Dispatchers.Default) { widgetIntents.forEach { sendWidgetBroadcast(it) } }
     }
@@ -1241,20 +1233,28 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     private fun broadcastMetadata() {
         val media = playlistManager.getCurrentMedia()
-        if (media == null || isVideoPlaying) return
+        if (isVideoPlaying) return
         if (lifecycleScope.isActive) lifecycleScope.launch(Dispatchers.Default) {
             sendBroadcast(Intent("com.android.music.metachanged")
-                    .putExtra("track", media.title)
-                    .putExtra("artist", media.artist)
-                    .putExtra("album", media.album)
-                    .putExtra("duration", media.length)
+                    .putExtra("track", media?.nowPlaying ?: media?.title)
+                    .putExtra("artist", if (media != null) MediaUtils.getMediaArtist(this@PlaybackService, media) else null)
+                    .putExtra("album", if (media != null) MediaUtils.getMediaAlbum(this@PlaybackService, media) else null)
+                    .putExtra("duration", media?.length ?: 0)
                     .putExtra("playing", isPlaying)
-                    .putExtra("package", "org.videolan.vlc"))
+                    .putExtra("package", "org.videolan.vlc")
+                    .apply {
+                        if (lastChaptersCount > 0) getCurrentChapter()?.let { putExtra("chapter", it) }
+                    })
         }
     }
 
     private fun loadLastAudioPlaylist() {
-        if (!AndroidDevices.isAndroidTv) loadLastPlaylist(PLAYLIST_TYPE_AUDIO)
+        if (!AndroidDevices.isAndroidTv) {
+            // If playback in background is enabled it should load the last media of any type
+            // not only audio
+            val playlistType = if (settings.getString(KEY_VIDEO_APP_SWITCH, "0") == "1") PLAYLIST_TYPE_ALL else PLAYLIST_TYPE_AUDIO
+            loadLastPlaylist(playlistType)
+        }
     }
 
     fun loadLastPlaylist(type: Int) {
@@ -1266,12 +1266,8 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     }
 
     fun showToast(text: String, duration: Int, isError: Boolean = false) {
-        val msg = handler.obtainMessage().apply {
-            what = SHOW_TOAST
-            data = bundleOf("text" to text, "duration" to duration, "isError" to isError)
-        }
-        handler.removeMessages(SHOW_TOAST)
-        handler.sendMessage(msg)
+        scheduler.cancelAction(SHOW_TOAST)
+        scheduler.startAction(SHOW_TOAST, bundleOf("text" to text, "duration" to duration, "isError" to isError))
     }
 
     @MainThread
@@ -1425,7 +1421,7 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     }
 
     @MainThread
-    fun load(media: MediaWrapper) = load(listOf(media), 0)
+    fun load(media: MediaWrapper, position: Int = 0) = load(listOf(media), position)
 
     /**
      * Play a media from the media list (playlist)
@@ -1508,11 +1504,11 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
      */
 
     @MainThread
-    fun append(mediaList: Array<MediaWrapper>) = append(mediaList.toList())
+    fun append(mediaList: Array<MediaWrapper>, index: Int = 0) = append(mediaList.toList(), index)
 
     @MainThread
-    fun append(mediaList: List<MediaWrapper>) = lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
-        playlistManager.append(mediaList)
+    fun append(mediaList: List<MediaWrapper>, index: Int = 0) = lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
+        playlistManager.append(mediaList, index)
         onMediaListChanged()
     }
 
@@ -1594,10 +1590,12 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     @MainThread
     @JvmOverloads
     fun seek(time: Long, length: Double = this.length.toDouble(), fromUser: Boolean = false, fast: Boolean = false) {
-        if (length > 0.0) this.setTime(time, fast) else setPosition((time.toFloat() / NO_LENGTH_PROGRESS_MAX.toFloat()))
-        if (fromUser) {
-            publishState(time)
+        if (length > 0.0) this.setTime(time, fast) else {
+            setPosition((time.toFloat() / NO_LENGTH_PROGRESS_MAX.toFloat()))
+            if (fromUser) publishState(time)
         }
+        // Required to update timeline when paused
+        if (fromUser && isPaused) showNotification()
     }
 
     @MainThread
@@ -1665,15 +1663,39 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     @MainThread
     fun setVideoAspectRatio(aspect: String?) = playlistManager.player.setVideoAspectRatio(aspect)
 
-    override fun getLifecycle(): Lifecycle = dispatcher.lifecycle
+    override fun onTaskTriggered(id: String, data:Bundle) {
+        when (id) {
+            SHOW_TOAST -> {
+                var text = data.getString("text")
+                val duration = data.getInt("duration")
+                val isError = data.getBoolean("isError")
+                if (isError) {
+                    when {
+                        nbErrors > 2 && System.currentTimeMillis() - lastErrorTime < 500 -> return
+                        nbErrors >= 2 -> text = getString(R.string.playback_multiple_errors)
+                    }
+                    currentToast?.cancel()
+                    nbErrors++
+                    lastErrorTime = System.currentTimeMillis()
+                }
+                currentToast = Toast.makeText(applicationContext, text, duration)
+                currentToast?.show()
+            }
+            END_MEDIASESSION -> if (::mediaSession.isInitialized) mediaSession.isActive = false
+        }
+    }
+
+    override val lifecycle: Lifecycle
+        get() = dispatcher.lifecycle
 
     /*
      * Browsing
      */
 
     override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot? {
+        val ctx = this@PlaybackService
         AccessControl.logCaller(clientUid, clientPackageName)
-        if (!Permissions.canReadStorage(this@PlaybackService)) {
+        if (!Permissions.canReadStorage(ctx)) {
             Log.w(TAG, "Returning null MediaBrowserService root. READ_EXTERNAL_STORAGE permission not granted.")
             return null
         }
@@ -1681,11 +1703,18 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
             rootHints?.containsKey(BrowserRoot.EXTRA_SUGGESTED) == true -> BrowserRoot(MediaSessionBrowser.ID_SUGGESTED, null)
             else -> {
                 val rootId = when (clientPackageName) {
-                    "com.google.android.googlequicksearchbox" -> MediaSessionBrowser.ID_ROOT_NO_TABS
+                    DRIVING_MODE_APP_PKG -> MediaSessionBrowser.ID_ROOT_NO_TABS
                     else -> MediaSessionBrowser.ID_ROOT
                 }
                 val extras = MediaSessionBrowser.getContentStyle().apply {
-                    putBoolean(EXTRA_MEDIA_SEARCH_SUPPORTED, true)
+                    putBoolean(MediaConstants.BROWSER_SERVICE_EXTRAS_KEY_SEARCH_SUPPORTED, true)
+                }
+                if (Build.VERSION.SDK_INT > Build.VERSION_CODES.O && clientPackageName == ANDROID_AUTO_APP_PKG) {
+                    val intent = Intent(CAR_SETTINGS).apply {
+                        component = ComponentName(ctx, VLCCarService::class.java)
+                    }
+                    val pendingIntent = CarPendingIntent.getCarApp(ctx, 0, intent, PendingIntent.FLAG_MUTABLE)
+                    extras.putParcelable(MediaConstants.BROWSER_SERVICE_EXTRAS_KEY_APPLICATION_PREFERENCES_USING_CAR_APP_LIBRARY_INTENT, pendingIntent)
                 }
                 BrowserRoot(rootId, extras)
             }
@@ -1694,13 +1723,14 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     override fun onLoadChildren(parentId: String, result: Result<List<MediaBrowserCompat.MediaItem>>) {
         result.detach()
+        val rootHints = browserRootHints
         val reload = parentId == MediaSessionBrowser.ID_LAST_ADDED && parentId != lastParentId
         lastParentId = parentId
         lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
             awaitMedialibraryStarted()
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
-                    result.sendResult(MediaSessionBrowser.browse(applicationContext, parentId, isShuffling))
+                    result.sendResult(MediaSessionBrowser.browse(applicationContext, parentId, isShuffling, rootHints))
                     if (reload && !medialibrary.isWorking) applicationContext.reloadLibrary()
                 } catch (e: RuntimeException) {
                     Log.e(TAG, "Failed to load children for $parentId", e)
@@ -1711,11 +1741,12 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
     override fun onSearch(query: String, extras: Bundle?, result: Result<List<MediaBrowserCompat.MediaItem>>) {
         result.detach()
+        val rootHints = browserRootHints
         lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
             awaitMedialibraryStarted()
             lifecycleScope.launch(Dispatchers.IO) {
                 try {
-                    result.sendResult(MediaSessionBrowser.search(applicationContext, query))
+                    result.sendResult(MediaSessionBrowser.search(applicationContext, query, rootHints))
                 } catch (e: RuntimeException) {
                     Log.e(TAG, "Failed to search for $query", e)
                 }
@@ -1731,10 +1762,13 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
         sleepTimerJob = launch {
             while (isActive) {
                 playerSleepTime.value?.let {
-                    if (System.currentTimeMillis() > it.timeInMillis) {
+                    val timerExpired = System.currentTimeMillis() > it.timeInMillis
+                    val shouldStop = if (waitForMediaEnd) timerExpired && mediaEndReached else timerExpired
+                    if (shouldStop) {
                         withContext(Dispatchers.Main) { if (isPlaying) stop() else setSleepTimer(null) }
                     }
                 }
+                if (mediaEndReached) mediaEndReached = false
                 delay(1000)
             }
         }
@@ -1764,10 +1798,10 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
         val renderer = RendererLiveData()
         val restartPlayer = LiveEvent<Boolean>()
         val headSetDetection = LiveEvent<Boolean>()
-        val equalizer = LiveEvent<MediaPlayer.Equalizer>()
+        val equalizer = LiveEvent<MediaPlayer.Equalizer?>()
 
-        private const val SHOW_TOAST = 1
-        private const val END_MEDIASESSION = 2
+        private const val SHOW_TOAST = "show_toast"
+        private const val END_MEDIASESSION = "end_mediasession"
 
         val playerSleepTime by lazy(LazyThreadSafetyMode.NONE) { MutableLiveData<Calendar?>().apply { value = null } }
 
@@ -1784,9 +1818,11 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
 
         fun hasRenderer() = renderer.value != null
 
-        private const val PLAYBACK_BASE_ACTIONS = (PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH
-                or PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID or PlaybackStateCompat.ACTION_PLAY_FROM_URI
-                or PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_SKIP_TO_QUEUE_ITEM)
+        fun updateState() {
+            instance?.let {
+                it.cbActor.trySend(UpdateState)
+            }
+        }
     }
 
     fun getTime(realTime: Long): Int {
@@ -1813,8 +1849,8 @@ class PlaybackService : MediaBrowserServiceCompat(), LifecycleOwner, CoroutineSc
     }
 
     fun isCarMode(): Boolean {
-        return if (CarConnectionHandler.preferCarConnectionHandler()) {
-            carConnectionHandler.connectionType.value?.let { it > CarConnectionHandler.CONNECTION_TYPE_NOT_CONNECTED } ?: false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            carConnection.type.value?.let { it > CarConnection.CONNECTION_TYPE_NOT_CONNECTED } ?: false
         } else {
             (getSystemService(Context.UI_MODE_SERVICE) as UiModeManager).currentModeType == Configuration.UI_MODE_TYPE_CAR
         }
@@ -1832,6 +1868,7 @@ private class CbRemove(val cb: PlaybackService.Callback) : CbAction()
 private object ShowNotification : CbAction()
 private class HideNotification(val remove: Boolean) : CbAction()
 private object UpdateMeta : CbAction()
+private object UpdateState : CbAction()
 
 fun PlaybackService.manageAbRepeatStep(abRepeatReset: View, abRepeatStop: View, abRepeatContainer: View, abRepeatAddMarker: TextView) {
     when {

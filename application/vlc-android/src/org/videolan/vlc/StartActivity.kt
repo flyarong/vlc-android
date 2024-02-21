@@ -23,6 +23,7 @@
 
 package org.videolan.vlc
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -39,11 +40,33 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.videolan.libvlc.util.AndroidUtil
 import org.videolan.medialibrary.MLServiceLocator
-import org.videolan.resources.*
+import org.videolan.resources.ACTION_PLAY_FROM_SEARCH
+import org.videolan.resources.ACTION_SEARCH_GMS
+import org.videolan.resources.ACTION_VIEW_ARC
+import org.videolan.resources.AndroidDevices
+import org.videolan.resources.AppContextProvider
+import org.videolan.resources.EXTRA_FIRST_RUN
+import org.videolan.resources.EXTRA_PATH
+import org.videolan.resources.EXTRA_SEARCH_BUNDLE
+import org.videolan.resources.EXTRA_TARGET
+import org.videolan.resources.EXTRA_UPGRADE
+import org.videolan.resources.MOBILE_MAIN_ACTIVITY
+import org.videolan.resources.MOBILE_SEARCH_ACTIVITY
+import org.videolan.resources.PREF_FIRST_RUN
+import org.videolan.resources.TV_MAIN_ACTIVITY
+import org.videolan.resources.TV_ONBOARDING_ACTIVITY
+import org.videolan.resources.TV_SEARCH_ACTIVITY
 import org.videolan.resources.util.getFromMl
 import org.videolan.resources.util.launchForeground
 import org.videolan.resources.util.startMedialibrary
-import org.videolan.tools.*
+import org.videolan.tools.AppScope
+import org.videolan.tools.BETA_WELCOME
+import org.videolan.tools.KEY_CURRENT_SETTINGS_VERSION
+import org.videolan.tools.KEY_TV_ONBOARDING_DONE
+import org.videolan.tools.Settings
+import org.videolan.tools.awaitAppIsForegroung
+import org.videolan.tools.getContextWithLocale
+import org.videolan.tools.putSingle
 import org.videolan.vlc.gui.BetaWelcomeActivity
 import org.videolan.vlc.gui.helpers.hf.StoragePermissionsDelegate.Companion.getStoragePermission
 import org.videolan.vlc.gui.onboarding.ONBOARDING_DONE_KEY
@@ -52,6 +75,7 @@ import org.videolan.vlc.gui.video.VideoPlayerActivity
 import org.videolan.vlc.media.MediaUtils
 import org.videolan.vlc.util.FileUtils
 import org.videolan.vlc.util.Permissions
+import org.videolan.vlc.util.Util
 import org.videolan.vlc.util.checkWatchNextId
 import videolan.org.commontools.TV_CHANNEL_PATH_APP
 import videolan.org.commontools.TV_CHANNEL_PATH_VIDEO
@@ -59,6 +83,7 @@ import videolan.org.commontools.TV_CHANNEL_QUERY_VIDEO_ID
 import videolan.org.commontools.TV_CHANNEL_SCHEME
 
 private const val SEND_CRASH_RESULT = 0
+private const val PROPAGATE_RESULT = 1
 private const val TAG = "VLC/StartActivity"
 class StartActivity : FragmentActivity() {
 
@@ -72,8 +97,6 @@ class StartActivity : FragmentActivity() {
                     "vlc.shortcut.video" -> R.id.nav_video
                     "vlc.shortcut.audio" -> R.id.nav_audio
                     "vlc.shortcut.browser" -> R.id.nav_directories
-                    "vlc.shortcut.network" -> R.id.nav_network
-                    "vlc.shortcut.playlists" -> R.id.nav_playlists
                     "vlc.shortcut.resume" -> R.id.ml_menu_last_playlist
                     else -> 0
                 }
@@ -140,6 +163,7 @@ class StartActivity : FragmentActivity() {
         val savedVersionNumber = settings.getInt(PREF_FIRST_RUN, -1)
         /* Check if it's the first run */
         val firstRun = savedVersionNumber == -1
+        Settings.firstRun = firstRun
         val upgrade = firstRun || savedVersionNumber != currentVersionNumber
         val tv = showTvUi()
         if (upgrade && (tv || !firstRun)) settings.putSingle(PREF_FIRST_RUN, currentVersionNumber)
@@ -161,7 +185,7 @@ class StartActivity : FragmentActivity() {
                 startApplication(tv, firstRun, upgrade, 0, removeOldDevices)
             else if (path == "/$TV_CHANNEL_PATH_VIDEO") {
                 var id = java.lang.Long.valueOf(data.getQueryParameter(TV_CHANNEL_QUERY_VIDEO_ID)!!)
-                val ctx = this
+                val ctx = this@StartActivity
                 lifecycleScope.launch(Dispatchers.IO) {
                     id = checkWatchNextId(ctx, id)
                     withContext(Dispatchers.Main) {
@@ -180,12 +204,14 @@ class StartActivity : FragmentActivity() {
                          "album" ->   getAlbum(id.toLong())
                          "artist" ->   getArtist(id.toLong())
                          "genre" ->   getGenre(id.toLong())
-                         "playlist" ->   getPlaylist(id.toLong(), false)
+                         "playlist" ->   getPlaylist(id.toLong(), false, false)
                          else ->   getMedia(id.toLong())
                         }
                         MediaUtils.playTracks(this@StartActivity, album, 0)
                     }
                 }
+            } else if(action != null && action== "vlc.remoteaccess.share") {
+                startActivity(Intent().apply { component = ComponentName(this@StartActivity, "org.videolan.vlc.webserver.gui.remoteaccess.RemoteAccessShareActivity") })
             } else {
                 val target = idFromShortcut
                 if (target == R.id.ml_menu_last_playlist)
@@ -204,6 +230,10 @@ class StartActivity : FragmentActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == SEND_CRASH_RESULT) {
             resume()
+        }
+        if (requestCode == PROPAGATE_RESULT) {
+            setResult(resultCode, data)
+            finish()
         }
     }
 
@@ -243,13 +273,17 @@ class StartActivity : FragmentActivity() {
             finish()
             return@launch
         }
+        // Remove FLAG_ACTIVITY_FORWARD_RESULT that is incompatible with startActivityForResult
+        intent.flags = Intent.FLAG_ACTIVITY_FORWARD_RESULT.inv() and intent.flags
         if (Permissions.canReadStorage(applicationContext) || getStoragePermission()) when {
             intent.type?.startsWith("video") == true -> try {
-                startActivity(intent.setClass(this@StartActivity, VideoPlayerActivity::class.java).apply { putExtra(VideoPlayerActivity.FROM_EXTERNAL, true) })
+                startActivityForResult(intent.setClass(this@StartActivity, VideoPlayerActivity::class.java).apply { putExtra(VideoPlayerActivity.FROM_EXTERNAL, true) }, PROPAGATE_RESULT, Util.getFullScreenBundle())
+                return@launch
             } catch (ex: SecurityException) {
                 intent.data?.let { MediaUtils.openMediaNoUi(it) }
             }
             intent.data?.authority == getString(R.string.tv_provider_authority) -> MediaUtils.openMediaNoUiFromTvContent(this@StartActivity, intent.data)
+            intent.data?.authority == "skip_to" -> PlaybackService.instance?.playIndex(intent.getIntExtra("index", 0))
             else -> withContext(Dispatchers.IO) { FileUtils.getUri(intent.data)}?.let { MediaUtils.openMediaNoUi(it) }
         }
         finish()

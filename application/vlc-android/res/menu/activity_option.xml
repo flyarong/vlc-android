@@ -4,6 +4,14 @@
 
     <item
             android:orderInCategory="0"
+            android:id="@+id/pin_relocked"
+            android:icon="@drawable/ic_am_pin_lock"
+            android:title="@string/lock_with_pin"
+            vlc:showAsAction="always"
+            android:visible="false"/>
+
+    <item
+            android:orderInCategory="0"
             android:id="@+id/play_all"
             android:icon="@drawable/ic_am_play"
             android:title="@string/play_all"
@@ -28,42 +36,57 @@
     <item
             android:orderInCategory="1"
             android:id="@+id/ml_menu_filter"
-            android:icon="@drawable/ic_menu_search_w"
+            android:icon="@drawable/ic_am_search"
             vlc:actionViewClass="androidx.appcompat.widget.SearchView"
             android:title="@string/searchable_hint"
             vlc:showAsAction="always|collapseActionView"/>
     <item
             android:orderInCategory="2"
             android:id="@+id/ml_menu_last_playlist"
-            android:icon="@drawable/ic_menu_lastplaylist"
+            android:icon="@drawable/ic_am_lastplaylist"
             android:title="@string/resume_playback_short_title"
             vlc:showAsAction="ifRoom|collapseActionView"
             android:visible="false"/>
+
+    <item
+            android:orderInCategory="2"
+            android:id="@+id/ml_menu_display_options"
+            android:icon="@drawable/ic_am_display_settings"
+            android:title="@string/display_settings"
+            vlc:showAsAction="ifRoom|collapseActionView"
+            android:visible="false"/>
+    <item
+            android:orderInCategory="2"
+            android:id="@+id/incognito_mode"
+            android:title="@string/incognito_mode"
+            android:checkable="true"
+            vlc:showAsAction="never"
+            android:visible="true"/>
     <item
             android:orderInCategory="3"
             android:id="@+id/ml_menu_display_list"
             android:title="@string/display_in_list"
             vlc:showAsAction="ifRoom|collapseActionView"
-            android:icon="@drawable/ic_view_list"
+            android:icon="@drawable/ic_am_view_list"
             android:visible="false"/>
     <item
             android:orderInCategory="3"
             android:id="@+id/ml_menu_display_grid"
             android:title="@string/display_in_grid"
             vlc:showAsAction="ifRoom|collapseActionView"
-            android:icon="@drawable/ic_view_grid"
+            android:icon="@drawable/ic_am_view_grid"
             android:visible="false"/>
     <item
             android:orderInCategory="3"
             android:id="@+id/ml_menu_scan"
             android:title="@string/add_to_scanned"
             vlc:showAsAction="ifRoom|collapseActionView"
-            android:icon="@drawable/ic_menu_addtoscan"
+            android:icon="@drawable/ic_am_addtoscan"
             android:visible="false" />
     <item
             android:orderInCategory="2"
             android:title="@string/sortby"
-            android:icon="@drawable/ic_menu_sort"
+            android:icon="@drawable/ic_am_sort"
             android:contentDescription="@string/sortby"
             android:id="@+id/ml_menu_sortby"
             vlc:showAsAction="ifRoom|collapseActionView"
@@ -121,29 +144,6 @@
         </menu>
     </item>
     <item
-            android:orderInCategory="2"
-            android:title="@string/video_min_group_length_title"
-            android:id="@+id/ml_menu_video_group"
-            vlc:showAsAction="never"
-            android:visible="false">
-        <menu>
-            <item
-                    android:orderInCategory="2"
-                    android:id="@+id/video_min_group_length_name"
-                    android:title="@string/video_min_group_length_name" />
-            <item
-                    android:orderInCategory="2"
-                    android:id="@+id/video_min_group_length_folder"
-                    android:title="@string/video_min_group_length_folder" />
-            <item
-                    android:orderInCategory="2"
-                    android:id="@+id/video_min_group_length_disable"
-                    android:title="@string/video_min_group_length_disable" />
-
-
-        </menu>
-    </item>
-    <item
             android:orderInCategory="3"
             android:title="@string/add_to_playlist"
             android:id="@+id/ml_menu_add_playlist"
@@ -166,10 +166,19 @@
             android:title="@string/add_server_favorite"
             vlc:showAsAction="never"
             android:visible="false"/>
+
+    <item
+            android:orderInCategory="4"
+            android:id="@+id/pin_unlock"
+            android:icon="@drawable/ic_am_pin_unlock"
+            android:title="@string/unlock_with_pin"
+            vlc:showAsAction="never"
+            android:visible="false"/>
+
     <item
             android:orderInCategory="4"
             android:id="@+id/ml_menu_refresh"
-            android:icon="@drawable/ic_menu_refresh"
+            android:icon="@drawable/ic_am_refresh"
             vlc:showAsAction="never"
             android:title="@string/refresh"/>
     <item
@@ -194,16 +203,9 @@
             vlc:showAsAction="never"
             android:id="@+id/browser_show_hidden_files" />
     <item
-            android:orderInCategory="3"
-            android:title="@string/artists_show_all_title"
-            android:visible="false"
-            android:checkable="true"
-            vlc:showAsAction="never"
-            android:id="@+id/artists_show_all_title" />
-    <item
             android:orderInCategory="5"
             android:title="@string/rename_group"
-            android:icon="@drawable/ic_edit_toolbar"
+            android:icon="@drawable/ic_am_edit"
             android:visible="false"
             vlc:showAsAction="ifRoom"
             android:id="@+id/rename_group" />
@@ -211,7 +213,7 @@
     <item
             android:orderInCategory="5"
             android:title="@string/ungroup"
-            android:icon="@drawable/ic_delete_toolbar"
+            android:icon="@drawable/ic_am_delete"
             android:visible="false"
             vlc:showAsAction="ifRoom"
             android:id="@+id/ungroup" />

@@ -374,6 +374,17 @@
         <item>album</item>
     </string-array>
 
+    <string-array name="aouts_complete">
+        <item>@string/aout_aaudio</item>
+        <item>@string/aout_audiotrack</item>
+        <item>@string/aout_opensles</item>
+    </string-array>
+    <string-array name="aouts_complete_values" translatable="false">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+    </string-array>
+
     <string-array name="aouts">
         <item>@string/aout_audiotrack</item>
         <item>@string/aout_opensles</item>
@@ -475,6 +486,35 @@
         <item>0</item>
         <item>1</item>
         <item>2</item>
+    </string-array>
+    <string-array name="widget_type_entries" translatable="false">
+        <item>@string/automatic</item>
+        <item>@string/widget_type_pill</item>
+        <item>@string/widget_type_normal</item>
+        <item>@string/widget_type_circle</item>
+        <item>@string/widget_type_large</item>
+    </string-array>
+
+    <string-array name="widget_type_values" translatable="false">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+
+    <string-array name="remote_access_content_entries" translatable="false">
+        <item>@string/video</item>
+        <item>@string/audio</item>
+        <item>@string/playlists</item>
+        <item>@string/search</item>
+    </string-array>
+
+    <string-array name="remote_access_content_values" translatable="false">
+        <item>0</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
     </string-array>
 
 </resources>

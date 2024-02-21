@@ -66,12 +66,13 @@ mediaToMediaWrapper(JNIEnv* env, fields *fields, medialibrary::MediaPtr const& m
     int64_t duration = mediaPtr->duration();
 
     auto hasThumbnail = mediaPtr->thumbnailStatus(medialibrary::ThumbnailSizeType::Thumbnail) == medialibrary::ThumbnailStatus::Available;
+    auto isFavorite = mediaPtr->isFavorite();
     return { env, env->NewObject(fields->MediaWrapper.clazz, fields->MediaWrapper.initID,
                           (jlong) mediaPtr->id(), mrl.get(), (jlong) mediaPtr->lastTime(), (jfloat) mediaPtr->lastPosition(), (jlong) duration, type,
                           title.get(), filename.get(), artist.get(), genre.get(), album.get(),
                           albumArtist.get(), width, height, thumbnail.get(),
                           audioTrack, spuTrack, trackNumber, discNumber, (jlong) files.at(0)->lastModificationDate(),
-                          (jlong) mediaPtr->playCount(), hasThumbnail, mediaPtr->releaseDate(), isPresent)
+                          (jlong) mediaPtr->playCount(), hasThumbnail, isFavorite, mediaPtr->releaseDate(), isPresent, (jlong) mediaPtr->insertionDate())
     };
 }
 
@@ -83,11 +84,12 @@ convertAlbumObject(JNIEnv* env, fields *fields, medialibrary::AlbumPtr const& al
     medialibrary::ArtistPtr artist = albumPtr->albumArtist();
     jlong albumArtistId = artist != nullptr ? albumPtr->albumArtist()->id() : 0;
     utils::jni::string artistName;
+    auto isFavorite = albumPtr->isFavorite();
     if ( artist != nullptr )
         artistName = vlcNewStringUTF(env, artist->name().c_str());
     return utils::jni::object{ env, env->NewObject(fields->Album.clazz, fields->Album.initID,
                           (jlong) albumPtr->id(), title.get(), albumPtr->releaseYear(),
-                                  thumbnailMrl.get(), artistName.get(), albumArtistId, (jint) albumPtr->nbTracks(), (jint) albumPtr->nbPresentTracks(), albumPtr->duration())
+                                  thumbnailMrl.get(), artistName.get(), albumArtistId, (jint) albumPtr->nbTracks(), (jint) albumPtr->nbPresentTracks(), albumPtr->duration(), isFavorite)
     };
 }
 
@@ -97,10 +99,11 @@ convertArtistObject(JNIEnv* env, fields *fields, medialibrary::ArtistPtr const& 
     auto name = vlcNewStringUTF(env, artistPtr->name().c_str());
     auto thumbnailMrl = vlcNewStringUTF(env, artistPtr->thumbnailMrl(medialibrary::ThumbnailSizeType::Thumbnail).c_str());
     auto shortBio = vlcNewStringUTF(env, artistPtr->shortBio().c_str());
+    auto isFavorite = artistPtr->isFavorite();
     auto musicBrainzId = vlcNewStringUTF(env, artistPtr->musicBrainzId().c_str());
     return utils::jni::object{ env, env->NewObject(fields->Artist.clazz, fields->Artist.initID,
                           (jlong) artistPtr->id(), name.get(), shortBio.get(), thumbnailMrl.get(),
-                                  musicBrainzId.get(), (jint) artistPtr->nbAlbums(), (jint) artistPtr->nbTracks(), (jint) artistPtr->nbPresentTracks())
+                                  musicBrainzId.get(), (jint) artistPtr->nbAlbums(), (jint) artistPtr->nbTracks(), (jint) artistPtr->nbPresentTracks(), isFavorite)
     };
 }
 
@@ -108,22 +111,18 @@ utils::jni::object
 convertGenreObject(JNIEnv* env, fields *fields, medialibrary::GenrePtr const& genrePtr)
 {
     auto name = vlcNewStringUTF(env, genrePtr->name().c_str());
+    auto isFavorite = genrePtr->isFavorite();
     return utils::jni::object{ env, env->NewObject(fields->Genre.clazz, fields->Genre.initID,
-                          (jlong) genrePtr->id(), name.get(), (jint) genrePtr->nbTracks(), (jint) genrePtr->nbPresentTracks())
+                          (jlong) genrePtr->id(), name.get(), (jint) genrePtr->nbTracks(), (jint) genrePtr->nbPresentTracks(), isFavorite)
     };
 }
 
 utils::jni::object
-convertPlaylistObject(JNIEnv* env, fields *fields, medialibrary::PlaylistPtr const& playlistPtr, jboolean includeMissing)
+convertPlaylistObject(JNIEnv* env, fields *fields, medialibrary::PlaylistPtr const& playlistPtr, jboolean includeMissing, jboolean onlyFavorites)
 {
     auto name = vlcNewStringUTF(env, playlistPtr->name().c_str());
-     medialibrary::QueryParameters params {
-           medialibrary::SortingCriteria::Default,
-           false,
-           static_cast<bool>( includeMissing )
-        };
     return utils::jni::object{ env, env->NewObject(fields->Playlist.clazz, fields->Playlist.initID,
-                          (jlong) playlistPtr->id(), name.get(), (jint)playlistPtr->media(&params)->count(), (jlong)playlistPtr->duration(), (jint)playlistPtr->nbVideo(), (jint)playlistPtr->nbAudio(), (jint)playlistPtr->nbUnknown(), (jint)playlistPtr->nbDurationUnknown())
+                          (jlong) playlistPtr->id(), name.get(), (jint)playlistPtr->nbMedia(), (jlong)playlistPtr->duration(), (jint)playlistPtr->nbVideo(), (jint)playlistPtr->nbAudio(), (jint)playlistPtr->nbUnknown(), (jint)playlistPtr->nbDurationUnknown(), (jboolean)playlistPtr->isFavorite())
     };
 }
 
@@ -131,9 +130,17 @@ utils::jni::object
 convertFolderObject(JNIEnv* env, fields *fields, medialibrary::FolderPtr const& folderPtr, int count)
 {
     auto name = vlcNewStringUTF(env, folderPtr->name().c_str());
-    auto mrl = vlcNewStringUTF(env, folderPtr->mrl().c_str());
+    utils::jni::string mrl;
+    try
+    {
+        mrl = vlcNewStringUTF(env, folderPtr->mrl().c_str());
+    }
+    catch( const medialibrary::fs::errors::DeviceRemoved& )
+    {
+        mrl = vlcNewStringUTF(env, "missing://");
+    }
     return utils::jni::object{ env, env->NewObject(fields->Folder.clazz, fields->Folder.initID,
-                          (jlong) folderPtr->id(), name.get(), mrl.get(), (jint) count)
+                          (jlong) folderPtr->id(), name.get(), mrl.get(), (jint) count, (jboolean)folderPtr->isFavorite())
     };
 }
 
@@ -142,7 +149,7 @@ convertVideoGroupObject(JNIEnv* env, fields *fields, medialibrary::MediaGroupPtr
 {
     auto name = vlcNewStringUTF(env, videogroupPtr->name().c_str());
     return utils::jni::object{ env, env->NewObject(fields->VideoGroup.clazz, fields->VideoGroup.initID,
-                          (jlong) videogroupPtr->id(), name.get(), (jint)videogroupPtr->nbVideo(), (jint)videogroupPtr->nbPresentVideo(), (jint)videogroupPtr->nbPresentSeen())
+                          (jlong) videogroupPtr->id(), name.get(), (jint)videogroupPtr->nbVideo(), (jint)videogroupPtr->nbPresentVideo(), (jint)videogroupPtr->nbPresentSeen(), (jboolean)videogroupPtr->isFavorite())
     };
 }
 
@@ -157,7 +164,7 @@ convertBookmarkObject(JNIEnv* env, fields *fields, medialibrary::BookmarkPtr con
 }
 
 utils::jni::object
-convertSearchAggregateObject(JNIEnv* env, fields *fields, medialibrary::SearchAggregate const& searchAggregatePtr, jboolean includeMissing)
+convertSearchAggregateObject(JNIEnv* env, fields *fields, medialibrary::SearchAggregate const& searchAggregatePtr, jboolean includeMissing, jboolean onlyFavorites)
 {
     //Albums
     utils::jni::objectArray albums;
@@ -195,7 +202,7 @@ convertSearchAggregateObject(JNIEnv* env, fields *fields, medialibrary::SearchAg
         index = -1;
         playlists = utils::jni::objectArray{ env, (jobjectArray) env->NewObjectArray(searchAggregatePtr.playlists->count(), fields->Playlist.clazz, NULL) };
         for(medialibrary::PlaylistPtr const& playlist : searchAggregatePtr.playlists->all()) {
-            auto item = convertPlaylistObject(env, fields, playlist, includeMissing);
+            auto item = convertPlaylistObject(env, fields, playlist, includeMissing, onlyFavorites);
             env->SetObjectArrayElement(playlists.get(), ++index, item.get());
         }
     }
@@ -224,6 +231,22 @@ convertSearchAggregateObject(JNIEnv* env, fields *fields, medialibrary::SearchAg
     }
     return { env, env->NewObject(fields->SearchAggregate.clazz, fields->SearchAggregate.initID,
                           albums.get(), artists.get(), genres.get(), videoList.get(), tracksList.get(), playlists.get())
+    };
+}
+utils::jni::object
+convertSubscriptionObject(JNIEnv* env, fields *fields, medialibrary::SubscriptionPtr const& subsPtr)
+{
+    auto name = vlcNewStringUTF(env, subsPtr->name().c_str());
+    return utils::jni::object{ env, env->NewObject(fields->Subscription.clazz, fields->Subscription.initID,
+            (jlong) subsPtr->id(), (jint) subsPtr->service(), name.get())
+    };
+}
+
+utils::jni::object
+convertServiceObject(JNIEnv* env, fields *fields, medialibrary::ServicePtr const& servicePtr)
+{
+    return utils::jni::object{ env, env->NewObject(fields->Service.clazz,
+            fields->Service.initID, (jint) servicePtr->type())
     };
 }
 

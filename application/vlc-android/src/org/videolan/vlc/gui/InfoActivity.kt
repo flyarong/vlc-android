@@ -38,6 +38,7 @@ import org.videolan.medialibrary.interfaces.media.MediaWrapper
 import org.videolan.medialibrary.media.MediaLibraryItem
 import org.videolan.resources.TAG_ITEM
 import org.videolan.resources.VLCInstance
+import org.videolan.resources.util.parcelable
 import org.videolan.tools.dp
 import org.videolan.vlc.R
 import org.videolan.vlc.databinding.InfoActivityBinding
@@ -81,9 +82,9 @@ class InfoActivity : AudioPlayerContainerActivity(), View.OnClickListener, PathA
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
         val item = if (savedInstanceState != null)
-            savedInstanceState.getParcelable<Parcelable>(TAG_ITEM) as MediaLibraryItem?
+            savedInstanceState.parcelable<Parcelable>(TAG_ITEM) as MediaLibraryItem?
         else
-            intent.getParcelableExtra<Parcelable>(TAG_ITEM) as MediaLibraryItem
+            intent.parcelable<Parcelable>(TAG_ITEM) as MediaLibraryItem
         if (item == null) {
             finish()
             return
@@ -265,17 +266,11 @@ class InfoModel : ViewModel() {
             mediaFactory.getFromUri(libVlc, mw.uri).apply { parse() }
         }
         if (!isActive) return@launch
-        var subs = false
-        val trackCount = media.getAllTracks().size
-        val tracks = LinkedList<IMedia.Track>()
-        for (i in 0 until trackCount) {
-            val track = media.getAllTracks()[i]
-            tracks.add(track)
-            subs = subs or (track.type == IMedia.Track.Type.Text)
-        }
+        val tracks = media.getAllTracks()
+        val subs = tracks.asReversed().any { it.type == IMedia.Track.Type.Text }
         media.release()
         hasSubs.value = subs
-        mediaTracks.value = tracks.toList()
+        mediaTracks.value = tracks
     }
 
     fun checkFile(mw: MediaWrapper) = viewModelScope.launch {

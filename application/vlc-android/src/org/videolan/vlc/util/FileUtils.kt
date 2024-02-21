@@ -129,24 +129,29 @@ object FileUtils {
     }
 
     @WorkerThread
-    internal fun copyAssetFolder(assetManager: AssetManager, fromAssetPath: String, toPath: String, force: Boolean): Boolean {
+    fun copyAssetFolder(assetManager: AssetManager, fromAssetPath: String, toPath: String, force: Boolean): Boolean {
         try {
             val files = assetManager.list(fromAssetPath)
             if (files.isNullOrEmpty()) return false
             File(toPath).mkdirs()
             var res = true
-            for (file in files)
+            for (file in files) {
                 res = if (file.contains(".")) {
-                    res and copyAsset(assetManager,
-                            "$fromAssetPath/$file",
-                            "$toPath/$file",
-                            force)
+                    res and copyAsset(
+                        assetManager,
+                        "$fromAssetPath/$file",
+                        "$toPath/$file",
+                        force
+                    )
                 } else {
-                    res and copyAssetFolder(assetManager,
-                            "$fromAssetPath/$file",
-                            "$toPath/$file",
-                            force)
+                    res and copyAssetFolder(
+                        assetManager,
+                        "$fromAssetPath/$file",
+                        "$toPath/$file",
+                        force
+                    )
                 }
+            }
             return res
         } catch (e: Exception) {
             e.printStackTrace()
@@ -194,7 +199,7 @@ object FileUtils {
         if (src.isDirectory) {
             val filesList = src.listFiles()
             dst.mkdirs()
-            for (file in filesList)
+            for (file in filesList ?: arrayOf())
                 ret = ret and copyFile(file, File(dst, file.name))
         } else if (src.isFile) {
             var inputStream: InputStream? = null
@@ -242,7 +247,7 @@ object FileUtils {
         //Delete from Android Medialib, for consistency with device MTP storing and other apps listing content:// media
         if (file.isDirectory) {
             deleted = true
-            for (child in file.listFiles()) deleted = deleted and deleteFile(child)
+            for (child in file.listFiles() ?: arrayOf()) deleted = deleted and deleteFile(child)
             if (deleted) deleted = deleted and file.delete()
         } else {
             val cr = AppContextProvider.appContext.contentResolver
@@ -274,9 +279,9 @@ object FileUtils {
         runIO(Runnable {
             if (!fileOrDirectory.exists() || !fileOrDirectory.canWrite())
                 return@Runnable
-            var success = true
+            val success: Boolean
             if (fileOrDirectory.isDirectory) {
-                for (child in fileOrDirectory.listFiles())
+                for (child in fileOrDirectory.listFiles() ?: arrayOf())
                     asyncRecursiveDelete(child, null)
                 success = fileOrDirectory.delete()
             } else {
@@ -339,7 +344,7 @@ object FileUtils {
     fun getUri(data: Uri?): Uri? {
         var uri = data
         val ctx = AppContextProvider.appContext
-        if (data != null && ctx != null && data.scheme == "content") {
+        if (data != null && data.scheme == "content") {
             // Mail-based apps - download the stream to a temporary file and play it
             if ("com.fsck.k9.attachmentprovider" == data.host || "gmail-ls" == data.host) {
                 var inputStream: InputStream? = null
@@ -352,7 +357,10 @@ object FileUtils {
                         val filename = cursor.getString(cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)).replace("/", "")
                         if (BuildConfig.DEBUG) Log.i(TAG, "Getting file $filename from content:// URI")
                         inputStream = ctx.contentResolver.openInputStream(data)
-                        if (inputStream == null) return data
+                        if (inputStream == null) {
+                            Log.i("FileUtils", "Expanding uri: $data to $data")
+                            return data
+                        }
                         os = FileOutputStream(AndroidDevices.EXTERNAL_PUBLIC_DIRECTORY + "/Download/" + filename)
                         val buffer = ByteArray(1024)
                         var bytesRead = inputStream.read(buffer)
@@ -363,13 +371,15 @@ object FileUtils {
                         uri = AndroidUtil.PathToUri(AndroidDevices.EXTERNAL_PUBLIC_DIRECTORY + "/Download/" + filename)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Couldn't download file from mail URI")
+                    Log.e(TAG, "Couldn't download file from mail URI: $data")
                     return null
                 } finally {
                     CloseableUtils.close(inputStream)
                     CloseableUtils.close(os)
                     CloseableUtils.close(cursor)
                 }
+            } else if (data.host == "com.amaze.filemanager" && data.path != null) {
+                uri = Uri.parse(data.path!!.replace("/storage_root", "file://"))
             } else if (data.authority == "media") {
                 uri = MediaUtils.getContentMediaUri(data)
             } else if (data.authority == ctx.getString(R.string.tv_provider_authority)) {
@@ -377,10 +387,16 @@ object FileUtils {
                 val media = medialibrary.getMedia(data.lastPathSegment!!.toLong())
                 uri = media.uri
             } else {
+                uri = MediaUtils.getContentMediaUri(data)
+                if (uri != null && uri != data)
+                    return uri
                 val inputPFD: ParcelFileDescriptor?
                 try {
                     inputPFD = ctx.contentResolver.openFileDescriptor(data, "r")
-                    if (inputPFD == null) return data
+                    if (inputPFD == null) {
+                        Log.i("FileUtils", "Expanding uri: $data to $data")
+                        return data
+                    }
                     uri = AndroidUtil.LocationToUri("fd://" + inputPFD.fd)
                     //                    Cursor returnCursor =
                     //                            getContentResolver().query(data, null, null, null, null);
@@ -412,6 +428,7 @@ object FileUtils {
                 }
             }// Media or MMS URI
         }
+        Log.i("FileUtils", "Expanding uri: $data to $uri")
         return uri
     }
 
@@ -483,31 +500,52 @@ object FileUtils {
     const val BUFFER = 2048
     fun zip(files: Array<String>, zipFileName: String):Boolean {
         return try {
-            var origin: BufferedInputStream? = null
-            val dest = FileOutputStream(zipFileName)
-            val out = ZipOutputStream(BufferedOutputStream(
-                    dest))
-            val data = ByteArray(BUFFER)
+            ZipOutputStream(BufferedOutputStream(
+                    FileOutputStream(zipFileName))).use { out ->
+                val data = ByteArray(BUFFER)
+                for (i in files.indices) {
+                    val fi = FileInputStream(files[i])
+                    BufferedInputStream(fi, BUFFER).use { origin ->
+                        val entry = ZipEntry(files[i].substring(files[i].lastIndexOf("/") + 1))
+                        out.putNextEntry(entry)
+                        var count = origin.read(data, 0, BUFFER)
 
-            for (i in files.indices) {
-                val fi = FileInputStream(files[i])
-                origin = BufferedInputStream(fi, BUFFER)
-
-                val entry = ZipEntry(files[i].substring(files[i].lastIndexOf("/") + 1))
-                out.putNextEntry(entry)
-                var count = origin.read(data, 0, BUFFER)
-
-                while (count != -1) {
-                    out.write(data, 0, count)
-                    count = origin.read(data, 0, BUFFER)
+                        while (count != -1) {
+                            out.write(data, 0, count)
+                            count = origin.read(data, 0, BUFFER)
+                        }
+                    }
                 }
-                origin.close()
             }
-
-            out.close()
             true
         } catch (e: Exception) {
             e.printStackTrace()
+            false
+        }
+    }
+
+    fun zipWithName(files: Array<Pair<String, String>>, zipFileName: String): Boolean {
+        return try {
+            File(zipFileName).parentFile?.mkdirs()
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFileName))).use { out ->
+                val data = ByteArray(BUFFER)
+                for (i in files.indices) {
+                    val fi = FileInputStream(files[i].first)
+                    BufferedInputStream(fi, BUFFER).use { origin ->
+                        val entry = ZipEntry(files[i].second)
+                        out.putNextEntry(entry)
+                        var count = origin.read(data, 0, BUFFER)
+
+                        while (count != -1) {
+                            out.write(data, 0, count)
+                            count = origin.read(data, 0, BUFFER)
+                        }
+                    }
+                }
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, e.message, e)
             false
         }
     }
@@ -557,10 +595,23 @@ fun String.encodeMrlWithTrailingSlash():String {
 }
 
 fun Uri?.isSoundFont():Boolean {
-    this?.lastPathSegment?.let { lastPathSegment ->
+    this?.lastPathSegment?.lowercase()?.let { lastPathSegment ->
         FileUtils.getSoundFontExtensions().forEach {
             if (lastPathSegment.endsWith(it)) return true
         }
     }
     return false
+}
+
+fun InputStream.toByteArray(): ByteArray {
+    val buffer = ByteArrayOutputStream()
+
+    var nRead: Int
+    val data = ByteArray(16384)
+
+    while (this.read(data, 0, data.size).also { nRead = it } != -1) {
+        buffer.write(data, 0, nRead)
+    }
+
+    return buffer.toByteArray()
 }

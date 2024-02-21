@@ -30,8 +30,12 @@ import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.widget.ImageView
 import androidx.appcompat.view.ActionMode
+import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import org.videolan.libvlc.util.AndroidUtil
 import org.videolan.medialibrary.interfaces.Medialibrary
 import org.videolan.resources.ACTIVITY_RESULT_OPEN
@@ -42,17 +46,15 @@ import org.videolan.tools.*
 import org.videolan.vlc.BuildConfig
 import org.videolan.vlc.R
 import org.videolan.vlc.StartActivity
-import org.videolan.vlc.extensions.ExtensionManagerService
-import org.videolan.vlc.extensions.ExtensionsManager
 import org.videolan.vlc.gui.audio.AudioBrowserFragment
 import org.videolan.vlc.gui.browser.BaseBrowserFragment
-import org.videolan.vlc.gui.browser.ExtensionBrowser
 import org.videolan.vlc.gui.dialogs.AllAccessPermissionDialog
 import org.videolan.vlc.gui.dialogs.NotificationPermissionManager
 import org.videolan.vlc.gui.helpers.INavigator
 import org.videolan.vlc.gui.helpers.Navigator
 import org.videolan.vlc.gui.helpers.UiTools
 import org.videolan.vlc.gui.helpers.UiTools.isTablet
+import org.videolan.vlc.gui.helpers.UiTools.showPinIfNeeded
 import org.videolan.vlc.gui.video.VideoGridFragment
 import org.videolan.vlc.interfaces.Filterable
 import org.videolan.vlc.interfaces.IRefreshable
@@ -60,6 +62,7 @@ import org.videolan.vlc.media.MediaUtils
 import org.videolan.vlc.reloadLibrary
 import org.videolan.vlc.util.Permissions
 import org.videolan.vlc.util.Util
+import org.videolan.vlc.util.WhatsNewManager
 import org.videolan.vlc.util.WidgetMigration
 import org.videolan.vlc.util.getScreenWidth
 import java.util.concurrent.TimeUnit
@@ -67,7 +70,6 @@ import java.util.concurrent.TimeUnit
 private const val TAG = "VLC/MainActivity"
 
 class MainActivity : ContentActivity(),
-        ExtensionManagerService.ExtensionManagerActivity,
         INavigator by Navigator()
 {
     var refreshing: Boolean = false
@@ -76,6 +78,7 @@ class MainActivity : ContentActivity(),
         }
     private lateinit var mediaLibrary: Medialibrary
     private var scanNeeded = false
+    private lateinit var toolbarIcon: ImageView
 
     override fun getSnackAnchorView(overAudioPlayer:Boolean): View? {
         val view = super.getSnackAnchorView(overAudioPlayer)
@@ -95,12 +98,13 @@ class MainActivity : ContentActivity(),
         prepareActionBar()
         /* Reload the latest preferences */
         scanNeeded = savedInstanceState == null && settings.getBoolean(KEY_MEDIALIBRARY_AUTO_RESCAN, true)
-        if (BuildConfig.DEBUG) extensionsManager = ExtensionsManager.getInstance()
         mediaLibrary = Medialibrary.getInstance()
 
-//        VLCBilling.getInstance(application).retrieveSkus()
-        WidgetMigration.launchIfNeeded(this)
-        NotificationPermissionManager.launchIfNeeded(this)
+        if (!NotificationPermissionManager.launchIfNeeded(this)) {
+            if (!WidgetMigration.launchIfNeeded(this)) {
+               if (!Settings.firstRun)  WhatsNewManager.launchIfNeeded(this) else WhatsNewManager.markAsShown(settings)
+            }
+        }
     }
 
     override fun onResume() {
@@ -117,6 +121,8 @@ class MainActivity : ContentActivity(),
 
 
     private fun prepareActionBar() {
+        toolbarIcon = findViewById(R.id.toolbar_icon)
+        updateIncognitoModeIcon()
         supportActionBar?.run {
             setDisplayHomeAsUpEnabled(false)
             setHomeButtonEnabled(false)
@@ -142,7 +148,7 @@ class MainActivity : ContentActivity(),
 
     override fun onSaveInstanceState(outState: Bundle) {
         val current = currentFragment
-        if (current !is ExtensionBrowser) supportFragmentManager.putFragment(outState, "current_fragment", current!!)
+        supportFragmentManager.putFragment(outState, "current_fragment", current!!)
         outState.putInt(EXTRA_TARGET, currentFragmentId)
         super.onSaveInstanceState(outState)
     }
@@ -165,9 +171,6 @@ class MainActivity : ContentActivity(),
         val fragment = currentFragment
         if (fragment is BaseBrowserFragment && fragment.goBack()) {
             return
-        } else if (fragment is ExtensionBrowser) {
-            fragment.goBack()
-            return
         }
         if (AndroidUtil.isNougatOrLater && isInMultiWindowMode) {
             UiTools.confirmExit(this)
@@ -183,6 +186,7 @@ class MainActivity : ContentActivity(),
 
     override fun onPrepareOptionsMenu(menu: Menu?): Boolean {
         menu?.findItem(R.id.ml_menu_refresh)?.isVisible = Permissions.canReadStorage(this)
+        menu?.findItem(R.id.incognito_mode)?.isChecked = Settings.getInstance(this).getBoolean(KEY_INCOGNITO, false)
         return super.onPrepareOptionsMenu(menu)
     }
 
@@ -199,11 +203,26 @@ class MainActivity : ContentActivity(),
                 if (Permissions.canReadStorage(this)) forceRefresh()
                 true
             }
+            R.id.incognito_mode -> {
+                lifecycleScope.launch {
+                    if (showPinIfNeeded()) return@launch
+                    Settings.getInstance (this@MainActivity).putSingle(KEY_INCOGNITO, !Settings.getInstance(this@MainActivity).getBoolean(KEY_INCOGNITO, false))
+                    item.isChecked = !item.isChecked
+                    updateIncognitoModeIcon()
+                }
+                true
+            }
             android.R.id.home ->
                 // Slide down the audio player or toggle the sidebar
                 slideDownAudioPlayer()
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    private fun updateIncognitoModeIcon() {
+        val incognito = Settings.getInstance (this).getBoolean(KEY_INCOGNITO, false)
+        toolbarIcon.setImageDrawable(ContextCompat.getDrawable(this, if (incognito) R.drawable.ic_incognito else if (BuildConfig.DEBUG && BuildConfig.VLC_MAJOR_VERSION == 4) R.drawable.ic_icon_vlc4 else R.drawable.ic_icon))
+
     }
 
     override fun onMenuItemActionExpand(item: MenuItem): Boolean {

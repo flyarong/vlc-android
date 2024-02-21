@@ -25,11 +25,11 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
 import android.support.v4.media.session.PlaybackStateCompat
 import android.text.format.DateFormat
 import android.view.*
 import android.widget.SeekBar
+import androidx.activity.OnBackPressedCallback
 import androidx.databinding.DataBindingUtil
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.videolan.medialibrary.interfaces.media.MediaWrapper
 import org.videolan.resources.AndroidDevices
+import org.videolan.resources.util.parcelableList
 import org.videolan.television.R
 import org.videolan.television.databinding.TvAudioPlayerBinding
 import org.videolan.television.ui.browser.BaseTvActivity
@@ -52,6 +53,7 @@ import org.videolan.vlc.gui.audio.EqualizerFragment
 import org.videolan.vlc.gui.dialogs.PlaybackSpeedDialog
 import org.videolan.vlc.gui.dialogs.SleepTimerDialog
 import org.videolan.vlc.gui.helpers.*
+import org.videolan.vlc.gui.helpers.UiTools.showPinIfNeeded
 import org.videolan.vlc.media.MediaUtils
 import org.videolan.vlc.util.getScreenWidth
 import org.videolan.vlc.viewmodels.BookmarkModel
@@ -64,7 +66,6 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
 
     private lateinit var binding: TvAudioPlayerBinding
     private lateinit var adapter: PlaylistAdapter
-    private val handler = Handler()
     private var lastMove: Long = 0
     private var shuffling = false
     private var currentCoverArt: String? = null
@@ -72,7 +73,7 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
     private var settings: SharedPreferences? = null
     private lateinit var pauseToPlay: AnimatedVectorDrawableCompat
     private lateinit var playToPause: AnimatedVectorDrawableCompat
-    private lateinit var optionsDelegate: PlayerOptionsDelegate
+    private var optionsDelegate: PlayerOptionsDelegate? = null
     lateinit var bookmarkModel: BookmarkModel
     private lateinit var bookmarkListDelegate: BookmarkListDelegate
     private val playerKeyListenerDelegate: PlayerKeyListenerDelegate by lazy(LazyThreadSafetyMode.NONE) { PlayerKeyListenerDelegate(this@AudioPlayerActivity) }
@@ -105,7 +106,7 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
         if (intent.hasExtra(MEDIA_PLAYLIST))
             intent.getLongExtra(MEDIA_PLAYLIST, -1L).let { MediaUtils.openPlaylist(this, it, position) }
         else
-            intent.getParcelableArrayListExtra<MediaWrapper>(MEDIA_LIST)?.let { MediaUtils.openList(this, it, position) }
+            intent.parcelableList<MediaWrapper>(MEDIA_LIST)?.let { MediaUtils.openList(this, it, position) }
         playToPause = AnimatedVectorDrawableCompat.create(this, R.drawable.anim_play_pause_video)!!
         pauseToPlay = AnimatedVectorDrawableCompat.create(this, R.drawable.anim_pause_play_video)!!
         binding.playbackSpeedQuickAction.setOnClickListener {
@@ -127,6 +128,24 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
             true
         }
         bookmarkModel = BookmarkModel.get(this)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (optionsDelegate?.isShowing() == true) {
+                    optionsDelegate?.hide()
+                    return
+                }
+                if (::bookmarkListDelegate.isInitialized && bookmarkListDelegate.visible) {
+                    bookmarkListDelegate.hide()
+                    return
+                }
+                finish()
+            }
+        })
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        optionsDelegate = null
     }
 
     private var timelineListener: SeekBar.OnSeekBarChangeListener = object : SeekBar.OnSeekBarChangeListener {
@@ -153,18 +172,6 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
             binding.sleepQuickAction.setVisible()
             binding.sleepQuickActionText.text = DateFormat.getTimeFormat(this).format(it.time)
         }
-    }
-
-    override fun onBackPressed() {
-        if (this::optionsDelegate.isInitialized && optionsDelegate.isShowing()) {
-            optionsDelegate.hide()
-            return
-        }
-        if (::bookmarkListDelegate.isInitialized && bookmarkListDelegate.visible) {
-            bookmarkListDelegate.hide()
-            return
-        }
-        super.onBackPressed()
     }
 
     override fun refresh() {}
@@ -204,15 +211,13 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
     private fun updateBackground() = lifecycleScope.launchWhenStarted {
         val width = if (binding.albumCover.width > 0) binding.albumCover.width else this@AudioPlayerActivity.getScreenWidth()
         val cover = withContext(Dispatchers.IO) { AudioUtil.readCoverBitmap(Uri.decode(currentCoverArt), width) }
-        val blurredCover = if (cover != null) withContext(Dispatchers.Default) { UiTools.blurBitmap(cover) } else null
         if (cover == null) {
-            binding.albumCover.setImageResource(R.drawable.ic_no_artwork_big)
+            binding.albumCover.setImageResource(R.drawable.ic_song_big)
             binding.background.clearColorFilter()
             binding.background.setImageResource(0)
         } else {
+            UiTools.blurView(binding.background, cover, 15F, UiTools.getColorFromAttribute(binding.background.context, R.attr.audio_player_background_tint))
             binding.albumCover.setImageBitmap(cover)
-            binding.background.setColorFilter(UiTools.getColorFromAttribute(binding.background.context, R.attr.audio_player_background_tint))
-            binding.background.setImageBitmap(blurredCover)
         }
     }
 
@@ -311,14 +316,14 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
     }
 
     private fun showAdvancedOptions(@Suppress("UNUSED_PARAMETER") v: View?) {
-        if (!this::optionsDelegate.isInitialized) {
+        if (optionsDelegate == null) {
             val service = model.service ?: return
             optionsDelegate = PlayerOptionsDelegate(this, service, false)
-            optionsDelegate.setBookmarkClickedListener {
-                showBookmarks()
+            optionsDelegate?.setBookmarkClickedListener {
+                lifecycleScope.launch { if (!showPinIfNeeded()) showBookmarks() }
             }
         }
-        optionsDelegate.show()
+        optionsDelegate?.show()
     }
 
     /**
@@ -364,7 +369,7 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
             PlaybackStateCompat.REPEAT_MODE_NONE -> {
                 model.repeatType = PlaybackStateCompat.REPEAT_MODE_NONE
                 binding.buttonRepeat.setImageResource(R.drawable.ic_repeat_audio)
-                binding.buttonRepeat.contentDescription = getString(R.string.repeat)
+                binding.buttonRepeat.contentDescription = getString(R.string.repeat_none)
             }
         }
     }
@@ -384,20 +389,20 @@ class AudioPlayerActivity : BaseTvActivity(),KeycodeListener  {
             PlaybackStateCompat.REPEAT_MODE_ONE -> {
                 model.repeatType = PlaybackStateCompat.REPEAT_MODE_NONE
                 binding.buttonRepeat.setImageResource(R.drawable.ic_repeat_audio)
-                binding.buttonRepeat.contentDescription = getString(R.string.repeat)
+                binding.buttonRepeat.contentDescription = getString(R.string.repeat_none)
             }
         }
     }
 
     fun onUpdateFinished() {
-        handler.post(Runnable {
+        binding.root.post {
             val position = model.currentMediaPosition
-            if (position < 0) return@Runnable
+            if (position < 0) return@post
             adapter.setSelection(position)
             val first = (binding.playlist.layoutManager as LinearLayoutManager).findFirstCompletelyVisibleItemPosition()
             val last = (binding.playlist.layoutManager as LinearLayoutManager).findLastCompletelyVisibleItemPosition()
             if (position < first || position > last) binding.playlist.smoothScrollToPosition(position)
-        })
+        }
     }
 
     companion object {

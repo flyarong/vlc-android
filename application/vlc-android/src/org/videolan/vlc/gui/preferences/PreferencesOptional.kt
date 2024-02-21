@@ -32,7 +32,6 @@ import androidx.preference.PreferenceScreen
 import org.videolan.vlc.R
 import org.videolan.vlc.gui.dialogs.FeatureFlagWarningDialog
 import org.videolan.vlc.gui.dialogs.RenameDialog
-import org.videolan.vlc.gui.helpers.UiTools
 import org.videolan.vlc.util.FeatureFlag
 import org.videolan.vlc.util.FeatureFlagManager
 
@@ -59,17 +58,18 @@ class PreferencesOptional : BasePreferenceFragment(), SharedPreferences.OnShared
 
     override fun onStart() {
         super.onStart()
-        preferenceScreen.sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.registerOnSharedPreferenceChangeListener(this)
     }
 
     override fun onStop() {
         super.onStop()
-        preferenceScreen.sharedPreferences
+        preferenceScreen.sharedPreferences!!
                 .unregisterOnSharedPreferenceChangeListener(this)
     }
 
 
-    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+        if (sharedPreferences == null || key == null) return
         val enabled = findPreference<CheckBoxPreference>(key)!!.isChecked
         FeatureFlagManager.getByKey(key)?.let { FeatureFlagManager.enable(requireActivity(), it, enabled) }
 //        if (enabled) UiTools.snacker(requireActivity(), getString(R.string.optional_features_warning))

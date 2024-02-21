@@ -35,8 +35,8 @@ import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import org.videolan.medialibrary.interfaces.Medialibrary
 import org.videolan.medialibrary.interfaces.media.MediaWrapper
+import org.videolan.medialibrary.interfaces.media.Playlist
 import org.videolan.medialibrary.media.MediaLibraryItem
-import org.videolan.resources.CTX_PLAY_ALL
 import org.videolan.tools.Settings
 import org.videolan.tools.dp
 import org.videolan.tools.putSingle
@@ -45,7 +45,9 @@ import org.videolan.vlc.databinding.PlaylistsFragmentBinding
 import org.videolan.vlc.gui.audio.AudioBrowserAdapter
 import org.videolan.vlc.gui.audio.AudioBrowserFragment
 import org.videolan.vlc.gui.audio.BaseAudioBrowser
+import org.videolan.vlc.gui.dialogs.*
 import org.videolan.vlc.gui.helpers.INavigator
+import org.videolan.vlc.gui.video.VideoBrowserFragment
 import org.videolan.vlc.gui.view.EmptyLoadingState
 import org.videolan.vlc.gui.view.FastScroller
 import org.videolan.vlc.gui.view.RecyclerSectionItemDecoration
@@ -53,6 +55,8 @@ import org.videolan.vlc.gui.view.RecyclerSectionItemGridDecoration
 import org.videolan.vlc.media.MediaUtils
 import org.videolan.vlc.providers.medialibrary.MedialibraryProvider
 import org.videolan.vlc.reloadLibrary
+import org.videolan.vlc.util.ContextOption
+import org.videolan.vlc.util.ContextOption.*
 import org.videolan.vlc.util.getScreenWidth
 import org.videolan.vlc.util.onAnyChange
 import org.videolan.vlc.viewmodels.mobile.PlaylistsViewModel
@@ -65,10 +69,12 @@ class PlaylistFragment : BaseAudioBrowser<PlaylistsViewModel>(), SwipeRefreshLay
     private lateinit var playlists: RecyclerView
     private lateinit var playlistAdapter: AudioBrowserAdapter
     private lateinit var fastScroller: FastScroller
+    override val isMainNavigationPoint = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        viewModel = getViewModel()
+        val type = arguments?.getInt(PLAYLIST_TYPE, 0) ?: 0
+        viewModel = getViewModel(Playlist.Type.values()[type])
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
@@ -98,34 +104,56 @@ class PlaylistFragment : BaseAudioBrowser<PlaylistsViewModel>(), SwipeRefreshLay
 
         playlists.adapter = playlistAdapter
         fastScroller = view.rootView.findViewById(R.id.songs_fast_scroller_playlist) as FastScroller
-        fastScroller.attachToCoordinator(view.rootView.findViewById(R.id.appbar) as AppBarLayout, view.rootView.findViewById(R.id.coordinator) as CoordinatorLayout, view.rootView.findViewById(R.id.fab) as FloatingActionButton)
-    }
-
-    override fun onActivityCreated(savedInstanceState: Bundle?) {
-        super.onActivityCreated(savedInstanceState)
-        viewModel.provider.pagedList.observe(requireActivity()) {
+        fastScroller.attachToCoordinator(requireActivity().findViewById(R.id.appbar) as AppBarLayout, requireActivity().findViewById(R.id.coordinator) as CoordinatorLayout, requireActivity().findViewById(R.id.fab) as FloatingActionButton)
+        viewModel.provider.pagedList.observe(viewLifecycleOwner) {
+            @Suppress("UNCHECKED_CAST")
             playlistAdapter.submitList(it as PagedList<MediaLibraryItem>)
             updateEmptyView()
         }
-        viewModel.provider.loading.observe(requireActivity()) { loading ->
-            setRefreshing(loading) { }
+        viewModel.provider.loading.observe(viewLifecycleOwner) { loading ->
+            if (isResumed) setRefreshing(loading) { }
         }
 
-        viewModel.provider.liveHeaders.observe(requireActivity()) {
+        viewModel.provider.liveHeaders.observe(viewLifecycleOwner) {
             playlists.invalidateItemDecorations()
         }
 
         fastScroller.setRecyclerView(getCurrentRV(), viewModel.provider)
+        (parentFragment as? VideoBrowserFragment)?.playlistOnlyFavorites = viewModel.provider.onlyFavorites
+    }
 
+    override fun onDisplaySettingChanged(key: String, value: Any) {
+        when (key) {
+            DISPLAY_IN_CARDS -> {
+                viewModel.providerInCard = value as Boolean
+                setupLayoutManager()
+                playlists.adapter = adapter
+                activity?.invalidateOptionsMenu()
+                Settings.getInstance(requireActivity()).putSingle(viewModel.displayModeKey, value)
+            }
+            ONLY_FAVS -> {
+                viewModel.providers[currentTab].showOnlyFavs(value as Boolean)
+                viewModel.refresh()
+                (parentFragment as? VideoBrowserFragment)?.playlistOnlyFavorites = value
+            }
+            CURRENT_SORT -> {
+                @Suppress("UNCHECKED_CAST") val sort = value as Pair<Int, Boolean>
+                viewModel.providers[currentTab].sort = sort.first
+                viewModel.providers[currentTab].desc = sort.second
+                viewModel.providers[currentTab].saveSort()
+                viewModel.refresh()
+            }
+        }
     }
 
     private fun updateEmptyView() {
         if (!isAdded) return
         swipeRefreshLayout.visibility = if (Medialibrary.getInstance().isInitiated) View.VISIBLE else View.GONE
-        binding.emptyLoading.emptyText = viewModel.filterQuery?.let {  getString(R.string.empty_search, it) } ?: getString(R.string.nomedia)
+        binding.emptyLoading.emptyText = viewModel.filterQuery?.let {  getString(R.string.empty_search, it) } ?: if (viewModel.provider.onlyFavorites) getString(R.string.nofav) else getString(R.string.nomedia)
         binding.emptyLoading.state =
                 when {
                     viewModel.provider.loading.value == true && empty -> EmptyLoadingState.LOADING
+                    empty && viewModel.provider.onlyFavorites -> EmptyLoadingState.EMPTY_FAVORITES
                     empty && viewModel.filterQuery != null -> EmptyLoadingState.EMPTY_SEARCH
                     empty -> EmptyLoadingState.EMPTY
                     else -> EmptyLoadingState.NONE
@@ -140,19 +168,27 @@ class PlaylistFragment : BaseAudioBrowser<PlaylistsViewModel>(), SwipeRefreshLay
     }
 
     override fun onPrepareOptionsMenu(menu: Menu) {
-        menu.findItem(R.id.ml_menu_display_grid).isVisible = !viewModel.providerInCard
-        menu.findItem(R.id.ml_menu_display_list).isVisible = viewModel.providerInCard
         super.onPrepareOptionsMenu(menu)
+        menu.findItem(R.id.ml_menu_sortby).isVisible = false
+        menu.findItem(R.id.ml_menu_display_options).isVisible = true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.ml_menu_display_list, R.id.ml_menu_display_grid -> {
-                viewModel.providerInCard = item.itemId == R.id.ml_menu_display_grid
-                setupLayoutManager()
-                playlists.adapter = adapter
-                activity?.invalidateOptionsMenu()
-                Settings.getInstance(requireActivity()).putSingle(viewModel.displayModeKey, item.itemId == R.id.ml_menu_display_grid)
+            R.id.ml_menu_display_options -> {
+                //filter all sorts and keep only applicable ones
+                val sorts = arrayListOf(Medialibrary.SORT_ALPHA, Medialibrary.SORT_FILENAME, Medialibrary.SORT_ARTIST, Medialibrary.SORT_ALBUM, Medialibrary.SORT_DURATION, Medialibrary.SORT_RELEASEDATE, Medialibrary.SORT_LASTMODIFICATIONDATE, Medialibrary.SORT_FILESIZE, Medialibrary.NbMedia).filter {
+                    viewModel.provider.canSortBy(it)
+                }
+                //Open the display settings Bottom sheet
+                DisplaySettingsDialog.newInstance(
+                        displayInCards = viewModel.providerInCard,
+                        onlyFavs = viewModel.provider.onlyFavorites,
+                        sorts = sorts,
+                        currentSort = viewModel.provider.sort,
+                        currentSortDesc = viewModel.provider.desc
+                )
+                        .show(requireActivity().supportFragmentManager, "DisplaySettingsDialog")
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -169,7 +205,10 @@ class PlaylistFragment : BaseAudioBrowser<PlaylistsViewModel>(), SwipeRefreshLay
             true -> {
                 val screenWidth = (requireActivity() as? INavigator)?.getFragmentWidth(requireActivity()) ?: requireActivity().getScreenWidth()
                 adapter?.cardSize = RecyclerSectionItemGridDecoration.getItemSize(screenWidth, nbColumns, spacing, 16.dp)
-                adapter?.let { adapter -> displayListInGrid(playlists, adapter, viewModel.provider as MedialibraryProvider<MediaLibraryItem>, spacing) }
+                adapter?.let { adapter ->
+                    @Suppress("UNCHECKED_CAST")
+                    displayListInGrid(playlists, adapter, viewModel.provider as MedialibraryProvider<MediaLibraryItem>, spacing)
+                }
             }
             else -> {
                 adapter?.cardSize = -1
@@ -201,7 +240,8 @@ class PlaylistFragment : BaseAudioBrowser<PlaylistsViewModel>(), SwipeRefreshLay
         } else super.onClick(v, position, item)
     }
 
-    override fun onCtxAction(position: Int, option: Long) {
+    override fun onCtxAction(position: Int, option: ContextOption) {
+        @Suppress("UNCHECKED_CAST")
         if (option == CTX_PLAY_ALL) MediaUtils.playAll(activity, viewModel.provider as MedialibraryProvider<MediaWrapper>, position, false)
         else super.onCtxAction(position, option)
     }
@@ -215,4 +255,13 @@ class PlaylistFragment : BaseAudioBrowser<PlaylistsViewModel>(), SwipeRefreshLay
     override fun getCurrentRV(): RecyclerView = playlists
 
     override fun hasFAB() = false
+
+    companion object {
+        private const val PLAYLIST_TYPE = "PLAYLIST_TYPE"
+        fun newInstance(type: Playlist.Type) = PlaylistFragment().apply {
+            arguments = Bundle().apply {
+                putInt(PLAYLIST_TYPE, type.ordinal)
+            }
+        }
+    }
 }

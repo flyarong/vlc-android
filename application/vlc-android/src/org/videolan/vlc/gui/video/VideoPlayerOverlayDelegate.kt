@@ -113,7 +113,7 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
     private var hingeSnackShown: Boolean = false
 
     var enableSubs = true
-    private lateinit var bookmarkListDelegate: BookmarkListDelegate
+    private var bookmarkListDelegate: BookmarkListDelegate? = null
 
     fun isHudBindingInitialized() = ::hudBinding.isInitialized
     fun isHudRightBindingInitialized() = ::hudRightBinding.isInitialized
@@ -161,7 +161,8 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
             showHingeSnackIfNeeded()
         } else {
             //device is separated and half opened. We display the controls on the bottom half and the video on the top half
-            if (foldingFeature.state == FoldingFeature.State.HALF_OPENED) {
+            if (foldingFeature.state == FoldingFeature.State.HALF_OPENED &&
+                !(foldingFeature.occlusionType == FoldingFeature.OcclusionType.NONE && foldingFeature.orientation == FoldingFeature.Orientation.VERTICAL)) {
                 val videoLayoutLP = (player.videoLayout!!.layoutParams as ViewGroup.LayoutParams)
                 val halfScreenSize = foldingFeature.bounds.top
                 videoLayoutLP.height = halfScreenSize
@@ -340,7 +341,7 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
      * Show the volume value with  bar
      * @param volume the volume value
      */
-    fun showVolumeBar(volume: Int, fromTouch: Boolean) {
+    fun showVolumeBar(volume: Int) {
         player.handler.sendEmptyMessage(VideoPlayerActivity.FADE_OUT_BRIGHTNESS_INFO)
         player.findViewById<ViewStubCompat>(R.id.player_volume_stub)?.setVisible()
         playerOverlayVolume = player.findViewById(R.id.player_overlay_volume)
@@ -402,6 +403,7 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
             initOverlay()
             if (!::hudBinding.isInitialized) return
             overlayTimeout = when {
+                service.playlistManager.videoStatsOn.value == true -> VideoPlayerActivity.OVERLAY_INFINITE
                 player.isTalkbackIsEnabled() -> VideoPlayerActivity.OVERLAY_INFINITE
                 Settings.videoHudDelay == -1 -> VideoPlayerActivity.OVERLAY_INFINITE
                 isBookmarkShown() -> VideoPlayerActivity.OVERLAY_INFINITE
@@ -428,7 +430,7 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
                         player.handler.sendMessageDelayed(player.handler.obtainMessage(VideoPlayerActivity.FADE_OUT), overlayTimeout.toLong())
                     hudBinding.playerOverlayPlay.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED)
                     if (isBookmarkShown())try {
-                        if (player.isTalkbackIsEnabled()) bookmarkListDelegate.addBookmarButton.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED)
+                        if (player.isTalkbackIsEnabled()) bookmarkListDelegate?.addBookmarButton?.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED)
                     } catch (e: Exception) {
                     }
                 }
@@ -440,11 +442,12 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
                 if (!player.displayManager.isPrimary)
                     overlayBackground.setVisible()
                 updateOverlayPausePlay(true)
+                player.handler.removeMessages(VideoPlayerActivity.FADE_OUT)
             } else {
+                player.handler.removeMessages(VideoPlayerActivity.FADE_OUT)
                 if (overlayTimeout != VideoPlayerActivity.OVERLAY_INFINITE)
                     player.handler.sendMessageDelayed(player.handler.obtainMessage(VideoPlayerActivity.FADE_OUT), overlayTimeout.toLong())
             }
-            player.handler.removeMessages(VideoPlayerActivity.FADE_OUT)
         }
     }
 
@@ -538,7 +541,7 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
                     player.delayDelegate.delayChanged(it, service)
                 }
                 service.playlistManager.videoStatsOn.observe(player) {
-                    if (it) showOverlay(true)
+                    if (it) showOverlay(true) else hideOverlay(false)
                     player.statsDelegate.container = hudBinding.statsContainer
                     player.statsDelegate.initPlotView(hudBinding)
                     if (it) player.statsDelegate.start() else player.statsDelegate.stop()
@@ -658,8 +661,8 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
         hudBinding.playerOverlayForward.setOnClickListener(player)
         hudBinding.playerOverlayRewind.setOnLongClickListener(player)
         hudBinding.playerOverlayForward.setOnLongClickListener(player)
-        hudBinding.playerOverlayRewind.setOnKeyListener(OnRepeatListenerKey(player))
-        hudBinding.playerOverlayForward.setOnKeyListener(OnRepeatListenerKey(player))
+        hudBinding.playerOverlayRewind.setOnKeyListener(OnRepeatListenerKey(player, player.lifecycle))
+        hudBinding.playerOverlayForward.setOnKeyListener(OnRepeatListenerKey(player, player.lifecycle))
     }
 
     fun updateOrientationIcon() {
@@ -852,6 +855,7 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
             hudRightBinding.playbackSpeedQuickAction.visibility = if (show && player.service?.rate != 1.0F) View.VISIBLE else View.GONE
             hudRightBinding.spuDelayQuickAction.visibility = if (show && player.service?.spuDelay != 0L) View.VISIBLE else View.GONE
             hudRightBinding.audioDelayQuickAction.visibility = if (show && player.service?.audioDelay != 0L) View.VISIBLE else View.GONE
+            hudRightBinding.clock.visibility = if (Settings.showTvUi) View.VISIBLE else View.GONE
 
             hudRightBinding.playbackSpeedQuickAction.text = player.service?.rate?.formatRateString()
             hudRightBinding.playbackSpeedQuickAction.contentDescription = player.getString(R.string.playback_speed)+ ". " + player.service?.rate?.formatRateString()
@@ -913,7 +917,7 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
      */
     fun lockScreen() {
         orientationLockedBeforeLock = player.orientationMode.locked
-        if (!player.orientationMode.locked) player.toggleOrientation()
+        if (!player.orientationMode.locked) player.toggleOrientationLock()
         if (isHudBindingInitialized()) {
             hudBinding.playerOverlayTime.isEnabled = false
             hudBinding.playerOverlaySeekbar.isEnabled = false
@@ -921,6 +925,15 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
             hudBinding.playlistNext.isEnabled = false
             hudBinding.playlistPrevious.isEnabled = false
             hudBinding.swipeToUnlock.setVisible()
+            //make sure the title and unlock views are not conflicting with the cutout / gestures
+            (playerUiContainer.layoutParams as? FrameLayout.LayoutParams)?.let {
+                it.topMargin =
+                    player.window.decorView.rootWindowInsets.displayCutout?.safeInsetTop ?: 0
+                it.bottomMargin =
+                    (player.window.decorView.rootWindowInsets.displayCutout?.safeInsetBottom
+                        ?: 0) + 24.dp
+            }
+
         }
         hideOverlay(true)
         player.lockBackButton = true
@@ -931,6 +944,10 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
      * Remove player lock
      */
     fun unlockScreen() {
+        (playerUiContainer.layoutParams as? FrameLayout.LayoutParams)?.let {
+            it.topMargin = 0
+            it.bottomMargin = 0
+        }
         player.orientationMode.locked = orientationLockedBeforeLock
         player.requestedOrientation = player.getScreenOrientation(player.orientationMode)
         if (isHudBindingInitialized()) {
@@ -963,33 +980,39 @@ class VideoPlayerOverlayDelegate (private val player: VideoPlayerActivity) {
 
     fun showBookmarks() {
         player.service?.let {
-            if (!this::bookmarkListDelegate.isInitialized) {
+            if (bookmarkListDelegate == null) {
                 bookmarkListDelegate = BookmarkListDelegate(player, it, player.bookmarkModel)
-                bookmarkListDelegate.markerContainer = hudBinding.bookmarkMarkerContainer
-                bookmarkListDelegate.visibilityListener = {
-                    if (bookmarkListDelegate.visible) showOverlayTimeout(VideoPlayerActivity.OVERLAY_INFINITE)
+                bookmarkListDelegate?.markerContainer = hudBinding.bookmarkMarkerContainer
+                bookmarkListDelegate?.visibilityListener = {
+                    if (bookmarkListDelegate?.visible == true) showOverlayTimeout(VideoPlayerActivity.OVERLAY_INFINITE)
                     else showOverlayTimeout(Settings.videoHudDelay * 1000)
                 }
             }
-            bookmarkListDelegate.show()
+            bookmarkListDelegate?.show()
             val top = hudBinding.playerOverlaySeekbar.top
-            bookmarkListDelegate.setProgressHeight((top + 12.dp).toFloat())
+            bookmarkListDelegate?.setProgressHeight((top + 12.dp).toFloat())
         }
     }
 
     fun rotateBookmarks() {
-        if (::bookmarkListDelegate.isInitialized && isBookmarkShown()) {
-            bookmarkListDelegate.hide()
-            showBookmarks()
+        if (bookmarkListDelegate != null && isBookmarkShown()) {
+            //make sure the rotation is complete and layout is done before resetting the bookmarks' layout
+            hudBinding.progressOverlay.post {
+                bookmarkListDelegate?.hide()
+                showBookmarks()
+            }
         }
     }
 
-    fun isBookmarkShown() = ::bookmarkListDelegate.isInitialized && bookmarkListDelegate.visible
+    fun isBookmarkShown() = bookmarkListDelegate != null && bookmarkListDelegate?.visible == true
     fun hideBookmarks() {
-        bookmarkListDelegate.hide()
+        bookmarkListDelegate?.hide()
     }
 
     fun getOverlayBrightness() = if (::playerOverlayBrightness.isInitialized) playerOverlayBrightness else null
 
     fun getOverlayVolume() = if (::playerOverlayVolume.isInitialized) playerOverlayVolume else null
+    fun onDestroy() {
+        bookmarkListDelegate = null
+    }
 }

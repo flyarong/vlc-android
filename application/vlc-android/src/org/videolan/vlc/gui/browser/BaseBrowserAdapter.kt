@@ -25,7 +25,6 @@ package org.videolan.vlc.gui.browser
 import android.annotation.TargetApi
 import android.graphics.drawable.BitmapDrawable
 import android.os.Build
-import android.os.Handler
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -51,30 +50,41 @@ import org.videolan.vlc.databinding.BrowserItemSeparatorBinding
 import org.videolan.vlc.databinding.CardBrowserItemBinding
 import org.videolan.vlc.gui.DiffUtilAdapter
 import org.videolan.vlc.gui.helpers.*
+import org.videolan.vlc.gui.view.FastScroller
+import org.videolan.vlc.util.LifecycleAwareScheduler
 import org.videolan.vlc.util.getDescriptionSpan
 
-open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibraryItem>, var sort:Int = Medialibrary.SORT_FILENAME, var asc:Boolean = true) : DiffUtilAdapter<MediaLibraryItem, BaseBrowserAdapter.ViewHolder<ViewDataBinding>>(), MultiSelectAdapter<MediaLibraryItem> {
+open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibraryItem>, var sort:Int = Medialibrary.SORT_FILENAME, var asc:Boolean = true) : DiffUtilAdapter<MediaLibraryItem, BaseBrowserAdapter.ViewHolder<ViewDataBinding>>(), MultiSelectAdapter<MediaLibraryItem>, FastScroller.SeparatedAdapter {
 
     protected val TAG = "VLC/BaseBrowserAdapter"
 
     val multiSelectHelper: MultiSelectHelper<MediaLibraryItem> = MultiSelectHelper(this, UPDATE_SELECTION)
 
-    private val folderDrawable: BitmapDrawable
-    private val audioDrawable: BitmapDrawable
-    private val videoDrawable: BitmapDrawable
-    private val subtitleDrawable: BitmapDrawable
-    private val unknownDrawable: BitmapDrawable
-    private val qaMoviesDrawable: BitmapDrawable
-    private val qaMusicDrawable: BitmapDrawable
-    private val qaPodcastsDrawable: BitmapDrawable
-    private val qaDownloadDrawable: BitmapDrawable
+    private val folderDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder)) }
+    private val folderDrawableBig: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_big)) }
+    private val audioDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_song)) }
+    private val audioDrawableBig: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_song_big)) }
+    private val videoDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_video)) }
+    private val videoDrawableBig: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_video_big)) }
+    private val subtitleDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_subtitles)) }
+    private val subtitleDrawableBig: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_subtitles_big)) }
+    private val unknownDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_unknown)) }
+    private val qaMoviesDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_movies)) }
+    private val qaMoviesDrawableBig: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_movies_big)) }
+    private val qaMusicDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_music)) }
+    private val qaMusicDrawableBig: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_music_big)) }
+    private val qaPodcastsDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_podcasts)) }
+    private val qaPodcastsDrawableBig: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_podcasts_big)) }
+    private val qaDownloadDrawable: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_download)) }
+    private val qaDownloadDrawableBig: BitmapDrawable by lazy { BitmapDrawable(browserContainer.containerActivity().resources, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_folder_download_big)) }
 
     internal var mediaCount = 0
     private var networkRoot = false
     private var specialIcons = false
-    private val handler by lazy(LazyThreadSafetyMode.NONE) { Handler() }
 
     val diffCallback = BrowserDiffCallback()
+
+    private var scheduler: LifecycleAwareScheduler? = null
 
     fun changeSort(sort:Int, asc:Boolean) {
         diffCallback.oldSort = diffCallback.newSort
@@ -93,15 +103,6 @@ open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibrar
         specialIcons = filesRoot || fileBrowser && mrl != null && mrl.endsWith(AndroidDevices.EXTERNAL_PUBLIC_DIRECTORY)
         // Setup resources
         val res = browserContainer.containerActivity().resources
-        folderDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_menu_folder))
-        audioDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_browser_audio_normal))
-        videoDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_browser_video_normal))
-        subtitleDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_browser_subtitle_normal))
-        unknownDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_browser_unknown_normal))
-        qaMoviesDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_browser_movies_normal))
-        qaMusicDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_browser_music_normal))
-        qaPodcastsDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_browser_podcasts_normal))
-        qaDownloadDrawable = BitmapDrawable(res, browserContainer.containerActivity().getBitmapFromDrawable(R.drawable.ic_browser_download_normal))
         diffCallback.oldSort = sort
         diffCallback.newSort = sort
         diffCallback.oldAsc = asc
@@ -110,6 +111,7 @@ open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibrar
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder<ViewDataBinding> {
         val inflater = LayoutInflater.from(parent.context)
+        @Suppress("UNCHECKED_CAST")
         return if (viewType == TYPE_MEDIA || viewType == TYPE_STORAGE)
             MediaViewHolder(if (browserContainer.inCards) BrowserItemBindingContainer(CardBrowserItemBinding.inflate(inflater, parent, false)) else BrowserItemBindingContainer(BrowserItemBinding.inflate(inflater, parent, false)))
         else
@@ -118,11 +120,11 @@ open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibrar
 
     override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
         super.onAttachedToRecyclerView(recyclerView)
-        if (Settings.listTitleEllipsize == 0 || Settings.listTitleEllipsize == 4) enableMarqueeEffect(recyclerView, handler)
+        if (Settings.listTitleEllipsize == 0 || Settings.listTitleEllipsize == 4) scheduler = enableMarqueeEffect(recyclerView)
     }
 
     override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
-        if (Settings.listTitleEllipsize == 0 || Settings.listTitleEllipsize == 4) handler.removeCallbacksAndMessages(null)
+        scheduler?.cancelAction(MARQUEE_ACTION)
         super.onDetachedFromRecyclerView(recyclerView)
     }
 
@@ -170,7 +172,7 @@ open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibrar
     }
 
     override fun onViewRecycled(holder: ViewHolder<ViewDataBinding>) {
-        if (Settings.listTitleEllipsize == 0 || Settings.listTitleEllipsize == 4) handler.removeCallbacksAndMessages(null)
+        scheduler?.cancelAction(MARQUEE_ACTION)
         super.onViewRecycled(holder)
         holder.titleView?.isSelected = false
     }
@@ -208,7 +210,7 @@ open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibrar
 
     @TargetApi(Build.VERSION_CODES.M)
     inner class MediaViewHolder(val bindingContainer: BrowserItemBindingContainer) : ViewHolder<ViewDataBinding>(bindingContainer.binding), MarqueeViewHolder {
-        override val titleView: TextView? = bindingContainer.title
+        override val titleView: TextView = bindingContainer.title
         var job : Job? = null
 
         init {
@@ -312,23 +314,23 @@ open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibrar
 
     fun getIcon(media: MediaWrapper, specialFolders: Boolean): BitmapDrawable {
         when (media.type) {
-            MediaWrapper.TYPE_AUDIO -> return audioDrawable
+            MediaWrapper.TYPE_AUDIO -> return if (browserContainer.inCards) audioDrawableBig else audioDrawable
             MediaWrapper.TYPE_DIR -> {
                 if (specialFolders) {
                     val uri = media.uri
                     if (AndroidDevices.MediaFolders.EXTERNAL_PUBLIC_MOVIES_DIRECTORY_URI == uri || AndroidDevices.MediaFolders.WHATSAPP_VIDEOS_FILE_URI == uri)
-                        return qaMoviesDrawable
+                        return if (browserContainer.inCards) qaMoviesDrawableBig else qaMoviesDrawable
                     if (AndroidDevices.MediaFolders.EXTERNAL_PUBLIC_MUSIC_DIRECTORY_URI == uri)
-                        return qaMusicDrawable
+                        return if (browserContainer.inCards) qaMusicDrawableBig else  qaMusicDrawable
                     if (AndroidDevices.MediaFolders.EXTERNAL_PUBLIC_PODCAST_DIRECTORY_URI == uri)
-                        return qaPodcastsDrawable
+                        return if (browserContainer.inCards) qaPodcastsDrawableBig else  qaPodcastsDrawable
                     if (AndroidDevices.MediaFolders.EXTERNAL_PUBLIC_DOWNLOAD_DIRECTORY_URI == uri)
-                        return qaDownloadDrawable
+                        return if (browserContainer.inCards) qaDownloadDrawableBig else  qaDownloadDrawable
                 }
-                return folderDrawable
+                return if (browserContainer.inCards) folderDrawableBig else folderDrawable
             }
-            MediaWrapper.TYPE_VIDEO -> return videoDrawable
-            MediaWrapper.TYPE_SUBTITLE -> return subtitleDrawable
+            MediaWrapper.TYPE_VIDEO -> return if (browserContainer.inCards) videoDrawableBig else videoDrawable
+            MediaWrapper.TYPE_SUBTITLE -> return  if (browserContainer.inCards) subtitleDrawableBig else subtitleDrawable
             else -> return unknownDrawable
         }
     }
@@ -357,7 +359,7 @@ open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibrar
 
     override fun createCB() = diffCallback
 
-    class BrowserDiffCallback : DiffUtilAdapter.DiffCallback<MediaLibraryItem>() {
+    class BrowserDiffCallback : DiffCallback<MediaLibraryItem>() {
         var oldSort = -1
         var newSort = -1
         var oldAsc = true
@@ -376,4 +378,6 @@ open class BaseBrowserAdapter(val browserContainer: BrowserContainer<MediaLibrar
 
         override fun areItemsTheSame(oldItemPosition : Int, newItemPosition : Int) = oldList[oldItemPosition] == newList[newItemPosition]
     }
+
+    override fun hasSections() = false
 }

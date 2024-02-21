@@ -24,32 +24,34 @@
 package org.videolan.vlc.gui.audio
 
 import android.annotation.TargetApi
+import android.app.Activity
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.os.Build
-import android.os.Handler
-import android.os.Message
+import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
-import android.widget.Toast
 import androidx.annotation.MainThread
 import androidx.constraintlayout.widget.ConstraintLayout
+import androidx.core.os.bundleOf
 import androidx.databinding.DataBindingUtil
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import androidx.recyclerview.widget.RecyclerView
 import org.videolan.libvlc.util.AndroidUtil
 import org.videolan.medialibrary.interfaces.media.MediaWrapper
+import org.videolan.resources.AndroidDevices
 import org.videolan.resources.AppContextProvider
 import org.videolan.tools.Settings
-import org.videolan.tools.WeakHandler
 import org.videolan.tools.setGone
 import org.videolan.tools.setVisible
 import org.videolan.vlc.R
 import org.videolan.vlc.databinding.PlaylistItemBinding
 import org.videolan.vlc.gui.DiffUtilAdapter
+import org.videolan.vlc.gui.helpers.MARQUEE_ACTION
 import org.videolan.vlc.gui.helpers.MarqueeViewHolder
 import org.videolan.vlc.gui.helpers.UiTools
 import org.videolan.vlc.gui.helpers.UiTools.isTablet
@@ -58,20 +60,31 @@ import org.videolan.vlc.gui.helpers.getBitmapFromDrawable
 import org.videolan.vlc.gui.view.MiniVisualizer
 import org.videolan.vlc.interfaces.SwipeDragHelperAdapter
 import org.videolan.vlc.media.MediaUtils
+import org.videolan.vlc.util.LifecycleAwareScheduler
 import org.videolan.vlc.util.MediaItemDiffCallback
+import org.videolan.vlc.util.SchedulerCallback
 import org.videolan.vlc.viewmodels.PlaylistModel
 import java.util.*
 
-private const val ACTION_MOVE = 0
-private const val ACTION_MOVED = 1
+private const val ACTION_MOVE = "action_move"
+private const val ACTION_MOVED = "action_moved"
 
-class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrapper, PlaylistAdapter.ViewHolder>(), SwipeDragHelperAdapter {
+class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrapper, PlaylistAdapter.ViewHolder>(), SwipeDragHelperAdapter, SchedulerCallback {
 
     private var defaultCoverVideo: BitmapDrawable
     private var defaultCoverAudio: BitmapDrawable
     private var model: PlaylistModel? = null
     private var currentPlayingVisu: MiniVisualizer? = null
-    private val handler by lazy(LazyThreadSafetyMode.NONE) { Handler() }
+    lateinit var scheduler: LifecycleAwareScheduler
+    var marqueeScheduler: LifecycleAwareScheduler? = null
+    var stopAfter: Int = -1
+        set(value) {
+            val old = field
+            field = value
+            if (old in 1 until itemCount) notifyItemChanged(old)
+            if (value in 1 until itemCount) notifyItemChanged(value)
+
+        }
 
     init {
         val ctx = when (player) {
@@ -80,8 +93,9 @@ class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrappe
             else -> AppContextProvider.appContext
         }
 
-        defaultCoverAudio = BitmapDrawable(ctx.resources, getBitmapFromDrawable(ctx, R.drawable.ic_no_song_background))
+        defaultCoverAudio = BitmapDrawable(ctx.resources, getBitmapFromDrawable(ctx, R.drawable.ic_song_background))
         defaultCoverVideo = UiTools.getDefaultVideoDrawable(ctx)
+        scheduler =  LifecycleAwareScheduler(this)
     }
 
     var currentIndex = 0
@@ -96,12 +110,11 @@ class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrappe
             }
         }
 
-    private val mHandler = PlaylistHandler(this)
-
     interface IPlayer {
         fun onPopupMenu(view: View, position: Int, item: MediaWrapper?)
         fun onSelectionSet(position: Int)
         fun playItem(position: Int, item: MediaWrapper)
+        fun getLifeCycle(): Lifecycle
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -115,6 +128,8 @@ class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrappe
         holder.binding.media = media
         holder.binding.subTitle = MediaUtils.getMediaSubtitle(media)
         holder.binding.scaleType = ImageView.ScaleType.CENTER_CROP
+        holder.binding.stopAfter.visibility = if (stopAfter == position) View.VISIBLE else View.GONE
+        holder.binding.stopAfterThis = (position == stopAfter)
         if (currentIndex == position) {
             if (model?.playing != false) holder.binding.playing.start() else holder.binding.playing.stop()
             holder.binding.playing.visibility = View.VISIBLE
@@ -137,7 +152,7 @@ class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrappe
             holder.binding.cover = defaultCoverAudio
         }
 
-        val tablet = holder.binding.itemDelete.context.isTablet()
+        val tablet = holder.binding.itemDelete.context.isTablet() || AndroidDevices.isTv
         if (tablet) holder.binding.itemDelete.setVisible() else holder.binding.itemDelete.setGone()
         if (tablet) holder.binding.itemMoveDown.setVisible() else holder.binding.itemMoveDown.setGone()
         if (tablet) holder.binding.itemMoveUp.setVisible() else holder.binding.itemMoveUp.setGone()
@@ -147,12 +162,19 @@ class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrappe
 
     override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
         super.onDetachedFromRecyclerView(recyclerView)
+        marqueeScheduler?.cancelAction("")
+        currentPlayingVisu?.stop()
         currentPlayingVisu = null
     }
 
     override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
         super.onAttachedToRecyclerView(recyclerView)
-        if (Settings.listTitleEllipsize == 4) enableMarqueeEffect(recyclerView, handler)
+        if (Settings.listTitleEllipsize == 4) marqueeScheduler = enableMarqueeEffect(recyclerView)
+    }
+
+    override fun onViewRecycled(holder: ViewHolder) {
+        marqueeScheduler?.cancelAction(MARQUEE_ACTION)
+        super.onViewRecycled(holder)
     }
 
     override fun getItemCount() = dataset.size
@@ -172,7 +194,7 @@ class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrappe
     override fun onItemMove(fromPosition: Int, toPosition: Int) {
         Collections.swap(dataset, fromPosition, toPosition)
         notifyItemMoved(fromPosition, toPosition)
-        mHandler.obtainMessage(ACTION_MOVE, fromPosition, toPosition).sendToTarget()
+        scheduler.startAction(ACTION_MOVE, bundleOf("from" to fromPosition, "to" to toPosition))
     }
 
     override fun onItemMoved(dragFrom: Int, dragTo: Int) {
@@ -185,8 +207,10 @@ class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrappe
             UiTools.snackerWithCancel(player.requireActivity(), message, overAudioPlayer = true, action = {}) {
                  model?.run { insertMedia(position, media) }
             }
-        } else if (player is Context) {
-            Toast.makeText(AppContextProvider.appContext, message, Toast.LENGTH_SHORT).show()
+        } else if (player is Activity) {
+            UiTools.snackerWithCancel(player, message, action = {}) {
+                model?.run { insertMedia(position, media) }
+            }
         }
         remove(position)
     }
@@ -231,33 +255,32 @@ class PlaylistAdapter(private val player: IPlayer) : DiffUtilAdapter<MediaWrappe
         }
     }
 
-    private class PlaylistHandler(owner: PlaylistAdapter) : WeakHandler<PlaylistAdapter>(owner) {
-
-        var from = -1
-        var to = -1
-
-        override fun handleMessage(msg: Message) {
-            when (msg.what) {
-                ACTION_MOVE -> {
-                    removeMessages(ACTION_MOVED)
-                    if (from == -1) from = msg.arg1
-                    to = msg.arg2
-                    sendEmptyMessageDelayed(ACTION_MOVED, 1000)
-                }
-                ACTION_MOVED -> {
-                    val model = owner?.model ?: return
-                    if (to > from) ++to
-                    model.move(from, to)
-                    to = -1
-                    from = to
-                }
-            }
-        }
-    }
-
     override fun createCB(): DiffCallback<MediaWrapper> = MediaItemDiffCallback()
 
     fun setCurrentlyPlaying(playing: Boolean) {
         if (playing) currentPlayingVisu?.start() else currentPlayingVisu?.stop()
     }
+
+    var from = -1
+    var to = -1
+    override fun onTaskTriggered(id: String, data: Bundle) {
+        when (id) {
+            ACTION_MOVE -> {
+                scheduler.cancelAction(ACTION_MOVED)
+                if (from == -1) from = data.getInt("from")
+                to = data.getInt("to")
+                scheduler.scheduleAction(ACTION_MOVED, 1000)
+            }
+            ACTION_MOVED -> {
+                val model = model ?: return
+                if (to > from) ++to
+                model.move(from, to)
+                to = -1
+                from = to
+            }
+        }
+    }
+
+    override val lifecycle: Lifecycle
+        get() = player.getLifeCycle()
 }

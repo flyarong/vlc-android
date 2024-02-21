@@ -29,6 +29,7 @@ import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import android.view.View
@@ -43,6 +44,7 @@ import org.videolan.tools.Settings
 import org.videolan.vlc.PlaybackService
 import org.videolan.vlc.R
 import org.videolan.vlc.gui.helpers.restartMediaPlayer
+import org.videolan.vlc.media.PlaylistManager
 import java.io.*
 
 /**
@@ -67,7 +69,7 @@ import java.io.*
 class BenchActivity : ShallowVideoPlayer() {
 
     private lateinit var timeOut: Runnable
-    private val timeoutHandler: Handler = Handler()
+    private val timeoutHandler: Handler = Handler(Looper.getMainLooper())
     private var screenshotsTimestamp: List<Long>? = null
     private var isScreenshot = false
     private var screenshotCount = 0
@@ -124,18 +126,18 @@ class BenchActivity : ShallowVideoPlayer() {
         super.onServiceChanged(service)
         if (isSpeed && this.service != null) {
             oldRate = service!!.rate
-            oldRepeating = service.playlistManager.repeating
+            oldRepeating = PlaylistManager.repeating.value
             service.playlistManager.setRepeatType(PlaybackStateCompat.REPEAT_MODE_ONE)
         } else if (!isSpeed && this.service != null) {
-            oldRepeating = service!!.playlistManager.repeating
-            service.playlistManager.setRepeatType(PlaybackStateCompat.REPEAT_MODE_NONE)
+            oldRepeating = PlaylistManager.repeating.value
+            service!!.playlistManager.setRepeatType(PlaybackStateCompat.REPEAT_MODE_NONE)
         }
         if (isHardware && this.service != null) {
             val sharedPref = Settings.getInstance(this)
             oldOpenglValue = sharedPref.getString(PREFERENCE_OPENGL, "-1")
             oldHistoryBoolean = sharedPref.getBoolean(PREFERENCE_PLAYBACK_HISTORY, true)
             AppScope.launch(Dispatchers.IO) {
-                sharedPref.edit {
+                with(sharedPref.edit()) {
                     putString(PREFERENCE_OPENGL, "0")
                     putBoolean(PREFERENCE_PLAYBACK_HISTORY, false)
                 }
@@ -187,6 +189,7 @@ class BenchActivity : ShallowVideoPlayer() {
                     return
                 }
                 if (intent.getSerializableExtra(EXTRA_TIMESTAMPS) is List<*>) {
+                    @Suppress("UNCHECKED_CAST")
                     screenshotsTimestamp = intent.getSerializableExtra(EXTRA_TIMESTAMPS) as List<Long>
                 } else {
                     errorFinish("Failed to get timestamps")
@@ -553,7 +556,7 @@ class BenchActivity : ShallowVideoPlayer() {
         if (isHardware && oldOpenglValue != "-2") {
             val sharedPref = Settings.getInstance(this)
             AppScope.launch(Dispatchers.IO) {
-                sharedPref.edit {
+                with(sharedPref.edit()) {
                     putString(PREFERENCE_OPENGL, oldOpenglValue)
                     putBoolean(PREFERENCE_PLAYBACK_HISTORY, oldHistoryBoolean)
                 }
@@ -574,9 +577,11 @@ class BenchActivity : ShallowVideoPlayer() {
             val stats = service!!.lastStats
             sendIntent.putExtra("percent_of_bad_seek", 0.0)
             sendIntent.putExtra("number_of_dropped_frames", stats?.lostPictures ?: 100)
+            sendIntent.putExtra("displayed_frames", stats?.displayedPictures )
             sendIntent.putExtra("late_frames", lateFrameCounter)
             setResult(Activity.RESULT_OK, sendIntent)
             sendIntent.putExtra("speed", speed)
+            sendIntent.putExtra("dav1d_version", getString(R.string.dav1d_version))
             super.finish()
         } else {
             errorFinish("PlaybackService is null")

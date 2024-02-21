@@ -30,6 +30,18 @@
                 type="boolean" />
 
         <variable
+            name="isFavorite"
+            type="boolean" />
+
+        <variable
+            name="showProgress"
+            type="boolean" />
+
+        <variable
+            name="showItemProgress"
+            type="boolean" />
+
+        <variable
                 name="inSelection"
                 type="boolean" />
 
@@ -169,6 +181,20 @@
                         vlc:layout_constraintTop_toTopOf="parent" />
 
                 <ImageView
+                    android:id="@+id/media_favorite"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginBottom="4dp"
+                    android:background="@drawable/rounded_corners_black_more_transparent"
+                    android:padding="3dp"
+                    android:visibility="@{isFavorite ? View.VISIBLE : View.GONE}"
+                    vlc:layout_constraintBottom_toTopOf="@+id/ml_item_progress"
+                    vlc:layout_constraintStart_toStartOf="@+id/ml_item_thumbnail"
+                    vlc:layout_goneMarginBottom="4dp"
+                    vlc:srcCompat="@drawable/ic_emoji_favorite_white" />
+
+                <ImageView
                         android:id="@+id/network_media"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
@@ -178,7 +204,7 @@
                         android:padding="3dp"
                         android:visibility="@{isNetwork &amp;&amp; isPresent ? View.VISIBLE : View.GONE}"
                         vlc:layout_constraintBottom_toTopOf="@+id/ml_item_progress"
-                        vlc:layout_constraintStart_toStartOf="@+id/ml_item_thumbnail"
+                        vlc:layout_constraintStart_toEndOf="@+id/media_favorite"
                         vlc:layout_goneMarginBottom="4dp"
                         vlc:srcCompat="@drawable/ic_emoji_network" />
 
@@ -193,7 +219,7 @@
                         android:padding="3dp"
                         android:visibility="@{isOTG &amp;&amp; isPresent ? View.VISIBLE : View.GONE}"
                         vlc:layout_constraintBottom_toTopOf="@+id/ml_item_progress"
-                        vlc:layout_constraintStart_toStartOf="@+id/ml_item_thumbnail"
+                        vlc:layout_constraintStart_toEndOf="@+id/media_favorite"
                         vlc:layout_goneMarginBottom="4dp"
                         vlc:srcCompat="@drawable/ic_emoji_otg" />
 
@@ -207,7 +233,7 @@
                         android:padding="3dp"
                         android:visibility="@{isSD &amp;&amp; isPresent ? View.VISIBLE : View.GONE}"
                         vlc:layout_constraintBottom_toTopOf="@+id/ml_item_progress"
-                        vlc:layout_constraintStart_toStartOf="@+id/ml_item_thumbnail"
+                        vlc:layout_constraintStart_toEndOf="@+id/media_favorite"
                         vlc:layout_goneMarginBottom="4dp"
                         vlc:srcCompat="@drawable/ic_emoji_sd" />
 
@@ -221,7 +247,7 @@
                         android:padding="3dp"
                         android:visibility="@{!isPresent ? View.VISIBLE : View.GONE}"
                         vlc:layout_constraintBottom_toTopOf="@+id/ml_item_progress"
-                        vlc:layout_constraintStart_toStartOf="@+id/ml_item_thumbnail"
+                        vlc:layout_constraintStart_toEndOf="@+id/media_favorite"
                         vlc:layout_goneMarginBottom="4dp"
                         vlc:srcCompat="@drawable/ic_emoji_absent" />
 
@@ -280,10 +306,21 @@
                         android:progress="@{progress}"
                         android:progressDrawable="@drawable/gridview_progressbar"
                         android:secondaryProgress="0"
-                        android:visibility="@{progress == 0 ? View.GONE : View.VISIBLE}"
+                        android:visibility="@{progress == 0 || !showItemProgress ? View.GONE : View.VISIBLE}"
                         vlc:layout_constraintBottom_toBottomOf="parent"
                         vlc:layout_constraintEnd_toEndOf="parent"
                         vlc:layout_constraintStart_toStartOf="parent" />
+
+                <ProgressBar
+                        android:id="@+id/thumb_progress"
+                        style="?android:attr/progressBarStyle"
+                        android:layout_width="32dp"
+                        android:layout_height="32dp"
+                        android:visibility="@{showProgress ? View.VISIBLE : View.GONE}"
+                        vlc:layout_constraintBottom_toBottomOf="parent"
+                        vlc:layout_constraintStart_toStartOf="parent"
+                        vlc:layout_constraintTop_toTopOf="parent"
+                        vlc:layout_constraintEnd_toEndOf="parent" />
 
             </androidx.constraintlayout.widget.ConstraintLayout>
 

@@ -79,6 +79,7 @@ class MoreFragment : BaseFragment(), IRefreshable, IHistory, IDialogManager,
     private lateinit var multiSelectHelper: MultiSelectHelper<MediaWrapper>
     private val historyAdapter: HistoryAdapter = HistoryAdapter(true)
     override fun hasFAB() = false
+    @Suppress("UNCHECKED_CAST")
     private fun getMultiHelper(): MultiSelectHelper<HistoryModel>? = historyAdapter.multiSelectHelper as? MultiSelectHelper<HistoryModel>
     private var savedSelection = ArrayList<Int>()
     private val dialogsDelegate = DialogDelegate()
@@ -87,6 +88,8 @@ class MoreFragment : BaseFragment(), IRefreshable, IHistory, IDialogManager,
         super.onCreate(savedInstanceState)
         (savedInstanceState?.getIntegerArrayList(KEY_SELECTION))?.let { savedSelection = it }
         dialogsDelegate.observeDialogs(this, this)
+        viewModel = ViewModelProvider(requireActivity(), HistoryModel.Factory(requireContext()))[HistoryModel::class.java]
+        streamsViewModel = ViewModelProvider(requireActivity(), StreamsModel.Factory(requireContext(), showDummy = true))[StreamsModel::class.java]
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
@@ -102,7 +105,6 @@ class MoreFragment : BaseFragment(), IRefreshable, IHistory, IDialogManager,
         aboutButton = view.findViewById(R.id.aboutButton)
         donationsButton = view.findViewById(R.id.donationsButton)
         if (!Settings.getInstance(requireActivity()).getBoolean(PLAYBACK_HISTORY, true)) historyEntry.setGone()
-        viewModel = ViewModelProvider(requireActivity(), HistoryModel.Factory(requireContext())).get(HistoryModel::class.java)
         viewModel.dataset.observe(viewLifecycleOwner) { list ->
             list?.let {
                 historyAdapter.update(it)
@@ -124,7 +126,6 @@ class MoreFragment : BaseFragment(), IRefreshable, IHistory, IDialogManager,
         historyAdapter.events.onEach { it.process() }.launchWhenStarted(lifecycleScope)
 
         streamsEntry = view.findViewById(R.id.streams_entry)
-        streamsViewModel = ViewModelProvider(requireActivity(), StreamsModel.Factory(requireContext(), showDummy = true)).get(StreamsModel::class.java)
         setup(this, streamsViewModel, object : KeyboardListener {
             override fun hideKeyboard() {}
         })
@@ -135,12 +136,12 @@ class MoreFragment : BaseFragment(), IRefreshable, IHistory, IDialogManager,
             i.putExtra("fragment", SecondaryActivity.STREAMS)
             requireActivity().startActivityForResult(i, SecondaryActivity.ACTIVITY_RESULT_SECONDARY)
         }
-        streamsViewModel.dataset.observe(requireActivity()) {
+        streamsViewModel.dataset.observe(viewLifecycleOwner) {
             streamsAdapter.update(it)
             streamsEntry.loading.state = EmptyLoadingState.NONE
 
         }
-        streamsViewModel.loading.observe(requireActivity()) {
+        streamsViewModel.loading.observe(viewLifecycleOwner) {
             lifecycleScope.launchWhenStarted {
                 if (it) delay(300L)
                 (activity as? MainActivity)?.refreshing = it
@@ -163,21 +164,7 @@ class MoreFragment : BaseFragment(), IRefreshable, IHistory, IDialogManager,
         donationsButton.setOnClickListener {
             requireActivity().showDonations()
         }
-    }
 
-    private fun manageDonationVisibility() {
-        if (activity == null) return
-//         if (VLCBilling.getInstance(requireActivity().application).status == BillingStatus.FAILURE ||  VLCBilling.getInstance(requireActivity().application).skuDetails.isEmpty()) donationsButton.setGone() else donationsButton.setVisible()
-    }
-
-    override fun onStart() {
-        super.onStart()
-        viewModel.refresh()
-        (activity as? ContentActivity)?.setTabLayoutVisibility(false)
-    }
-
-    override fun onActivityCreated(savedInstanceState: Bundle?) {
-        super.onActivityCreated(savedInstanceState)
         historyEntry.list.adapter = historyAdapter
         historyEntry.list.nextFocusUpId = R.id.ml_menu_search
         historyEntry.list.nextFocusLeftId = android.R.id.list
@@ -197,6 +184,18 @@ class MoreFragment : BaseFragment(), IRefreshable, IHistory, IDialogManager,
         registerForContextMenu(historyEntry.list)
     }
 
+    private fun manageDonationVisibility() {
+        if (activity == null) return
+//         if (VLCBilling.getInstance(requireActivity().application).status == BillingStatus.FAILURE ||  VLCBilling.getInstance(requireActivity().application).skuDetails.isEmpty()) donationsButton.setGone() else donationsButton.setVisible()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        viewModel.refresh()
+        (activity as? ContentActivity)?.setTabLayoutVisibility(false)
+    }
+
+
     override fun onSaveInstanceState(outState: Bundle) {
         getMultiHelper()?.let {
             outState.putIntegerArrayList(KEY_SELECTION, it.selectionMap)
@@ -213,7 +212,7 @@ class MoreFragment : BaseFragment(), IRefreshable, IHistory, IDialogManager,
 
     override fun clearHistory() {
         viewModel.clearHistory()
-        Medialibrary.getInstance().clearHistory()
+        Medialibrary.getInstance().clearHistory(Medialibrary.HISTORY_TYPE_GLOBAL)
     }
 
     override fun onCreateActionMode(mode: ActionMode?, menu: Menu?): Boolean {

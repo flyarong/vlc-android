@@ -44,7 +44,7 @@ import com.google.android.material.tabs.TabLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.videolan.medialibrary.interfaces.media.MediaWrapper
+import org.videolan.medialibrary.interfaces.media.*
 import org.videolan.medialibrary.media.MediaLibraryItem
 import org.videolan.resources.*
 import org.videolan.tools.*
@@ -67,9 +67,15 @@ import org.videolan.vlc.interfaces.IEventsHandler
 import org.videolan.vlc.media.MediaUtils
 import org.videolan.vlc.media.PlaylistManager
 import org.videolan.vlc.providers.medialibrary.MedialibraryProvider
+import org.videolan.vlc.util.ContextOption
 import org.videolan.vlc.util.getScreenWidth
 import org.videolan.vlc.util.share
 import org.videolan.vlc.util.showParentFolder
+import org.videolan.vlc.util.ContextOption.*
+import org.videolan.vlc.util.ContextOption.Companion.createCtxAudioFlags
+import org.videolan.vlc.util.ContextOption.Companion.createCtxPlaylistAlbumFlags
+import org.videolan.vlc.util.ContextOption.Companion.createCtxTrackFlags
+import org.videolan.vlc.util.FlagSet
 import org.videolan.vlc.viewmodels.MedialibraryViewModel
 import java.security.SecureRandom
 import java.util.*
@@ -81,7 +87,7 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
     var listColor: Int = -1
     internal lateinit var adapters: Array<AudioBrowserAdapter>
 
-    private var tabLayout: TabLayout? = null
+    var tabLayout: TabLayout? = null
     lateinit var viewPager: ViewPager
 
     var nbColumns = 2
@@ -206,7 +212,7 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
         list.layoutParams = lp
     }
 
-    private fun setupTabLayout() {
+    open fun setupTabLayout() {
         if (tabLayout == null || !::viewPager.isInitialized) return
         tabLayout?.setupWithViewPager(viewPager)
         if (!::layoutOnPageChangeListener.isInitialized) layoutOnPageChangeListener = TabLayout.TabLayoutOnPageChangeListener(tabLayout)
@@ -216,10 +222,10 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
     }
 
     private fun unSetTabLayout() {
-        if (tabLayout != null || !::viewPager.isInitialized) return
-        viewPager.removeOnPageChangeListener(layoutOnPageChangeListener)
+        if (::viewPager.isInitialized) viewPager.removeOnPageChangeListener(layoutOnPageChangeListener)
         tabLayout?.removeOnTabSelectedListener(this)
-        viewPager.removeOnPageChangeListener(this)
+        if (::viewPager.isInitialized) viewPager.removeOnPageChangeListener(this)
+        tabLayout?.setupWithViewPager(null)
     }
 
     override fun onStart() {
@@ -289,6 +295,8 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
         menu.findItem(R.id.action_mode_audio_delete).isVisible = isMedia
         menu.findItem(R.id.action_mode_audio_share).isVisible = isMedia
         menu.findItem(R.id.action_mode_audio_share).isVisible = isMedia
+        menu.findItem(R.id.action_mode_favorite_add).isVisible = getCurrentAdapter()?.multiSelectHelper?.getSelection()?.none { it.isFavorite } ?: false
+        menu.findItem(R.id.action_mode_favorite_remove).isVisible = getCurrentAdapter()?.multiSelectHelper?.getSelection()?.none { !it.isFavorite } ?: false
         menu.findItem(R.id.action_mode_go_to_folder).isVisible = if (count == 1) getCurrentAdapter()?.multiSelectHelper?.let { selectHelper ->
             (selectHelper.getSelection().first() as? MediaWrapper)?.let {
                 it.uri.retrieveParent() != null
@@ -311,6 +319,7 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
         val list = getCurrentAdapter()?.multiSelectHelper?.getSelection()
         stopActionMode()
         if (!list.isNullOrEmpty()) lifecycleScope.launch {
+            @Suppress("UNCHECKED_CAST")
             if (isStarted()) when (item.itemId) {
                 R.id.action_mode_audio_play -> MediaUtils.openList(activity, list.getTracks(), 0)
                 R.id.action_mode_audio_append -> MediaUtils.appendMedia(activity, list.getTracks())
@@ -320,6 +329,8 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
                 R.id.action_mode_audio_set_song -> activity?.setRingtone(list.first() as MediaWrapper)
                 R.id.action_mode_audio_delete -> removeItems(list)
                 R.id.action_mode_go_to_folder -> (list.first() as? MediaWrapper)?.let { showParentFolder(it) }
+                R.id.action_mode_favorite_add -> lifecycleScope.launch { viewModel.changeFavorite(list, true) }
+                R.id.action_mode_favorite_remove -> lifecycleScope.launch { viewModel.changeFavorite(list, false) }
             }
         }
         return true
@@ -367,15 +378,38 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
     }
 
     override fun onCtxClick(v: View, position: Int, item: MediaLibraryItem) {
-        val flags: Long = when (item.itemType) {
-            MediaLibraryItem.TYPE_MEDIA -> CTX_TRACK_FLAGS
-            MediaLibraryItem.TYPE_ARTIST, MediaLibraryItem.TYPE_GENRE -> {
-                if (item.tracksCount > 2) CTX_AUDIO_FLAGS or CTX_PLAY_SHUFFLE else CTX_AUDIO_FLAGS
+        val flags: FlagSet<ContextOption> = when (item.itemType) {
+            MediaLibraryItem.TYPE_MEDIA -> {
+                createCtxTrackFlags().apply {
+                    if ((item as? MediaWrapper)?.isFavorite == true) add(CTX_FAV_REMOVE) else add(CTX_FAV_ADD)
+                }
             }
-            MediaLibraryItem.TYPE_PLAYLIST, MediaLibraryItem.TYPE_ALBUM -> {
-                if (item.tracksCount > 2) CTX_PLAYLIST_ALBUM_FLAGS or CTX_PLAY_SHUFFLE else CTX_PLAYLIST_ALBUM_FLAGS
+            MediaLibraryItem.TYPE_ARTIST -> {
+                createCtxAudioFlags().apply {
+                    if (item.tracksCount > 2) add(CTX_PLAY_SHUFFLE)
+                    if ((item as? Artist)?.isFavorite == true) add(CTX_FAV_REMOVE) else add(CTX_FAV_ADD)
+                }
             }
-            else -> CTX_AUDIO_FLAGS
+            MediaLibraryItem.TYPE_ALBUM -> {
+                createCtxPlaylistAlbumFlags().apply {
+                    if (item.tracksCount > 2) add(CTX_PLAY_SHUFFLE)
+                    if ((item as? Album)?.isFavorite == true) add(CTX_FAV_REMOVE) else add(CTX_FAV_ADD)
+                }
+            }
+            MediaLibraryItem.TYPE_GENRE -> {
+                createCtxAudioFlags().apply {
+                    if (item.tracksCount > 2) add(CTX_PLAY_SHUFFLE)
+                    if ((item as? Genre)?.isFavorite == true) add(CTX_FAV_REMOVE) else add(CTX_FAV_ADD)
+                }
+            }
+            MediaLibraryItem.TYPE_PLAYLIST -> {
+                createCtxPlaylistAlbumFlags().apply {
+                    add(CTX_PLAY_AS_AUDIO)
+                    if (item.tracksCount > 2) add(CTX_PLAY_SHUFFLE)
+                    if (item.isFavorite) add(CTX_FAV_REMOVE) else add(CTX_FAV_ADD)
+                }
+            }
+            else -> createCtxAudioFlags()
         }
         if (actionMode == null) showContext(requireActivity(), this, position, item, flags)
     }
@@ -393,12 +427,20 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
 
     override fun onItemFocused(v: View, item: MediaLibraryItem) {}
 
-    override fun onCtxAction(position: Int, option: Long) {
+    override fun onCtxAction(position: Int, option: ContextOption) {
         if (position >= getCurrentAdapter()?.itemCount ?: 0) return
         val media = getCurrentAdapter()?.getItem(position) ?: return
         when (option) {
             CTX_PLAY -> MediaUtils.playTracks(requireActivity(), media, 0)
             CTX_PLAY_SHUFFLE -> MediaUtils.playTracks(requireActivity(), media, SecureRandom().nextInt(min(media.tracksCount, MEDIALIBRARY_PAGE_SIZE)), true)
+            CTX_PLAY_AS_AUDIO -> lifecycleScope.launch(Dispatchers.IO) {
+                (media as? Playlist)?.tracks?.let { trackArray ->
+                    MediaUtils.openList(requireActivity(), trackArray.map {
+                        it.addFlags(MediaWrapper.MEDIA_FORCE_AUDIO)
+                        it
+                    }.toList(), 0)
+                }
+            }
             CTX_INFORMATION -> showInfoDialog(media)
             CTX_DELETE -> removeItem(media)
             CTX_APPEND -> MediaUtils.appendMedia(requireActivity(), media.tracks)
@@ -408,11 +450,18 @@ abstract class BaseAudioBrowser<T : MedialibraryViewModel> : MediaBrowserFragmen
             CTX_SHARE -> lifecycleScope.launch { (requireActivity() as AppCompatActivity).share(media as MediaWrapper) }
             CTX_GO_TO_FOLDER -> showParentFolder(media as MediaWrapper)
             CTX_ADD_SHORTCUT -> lifecycleScope.launch {requireActivity().createShortcut(media)}
+            CTX_FAV_ADD, CTX_FAV_REMOVE -> lifecycleScope.launch {
+                withContext(Dispatchers.IO) { media.isFavorite = option == CTX_FAV_ADD }
+            }
+            else -> {}
         }
     }
 
     protected val empty: Boolean
         get() = viewModel.isEmpty() && getCurrentAdapter()?.isEmpty != false
 
+    fun emptyAt(index:Int): Boolean = viewModel.isEmptyAt(index) && getCurrentAdapter()?.isEmpty != false
+
+    @Suppress("UNCHECKED_CAST")
     override fun getMultiHelper(): MultiSelectHelper<T>? = getCurrentAdapter()?.multiSelectHelper as? MultiSelectHelper<T>
 }

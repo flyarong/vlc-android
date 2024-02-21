@@ -44,7 +44,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.videolan.medialibrary.interfaces.Medialibrary
-import org.videolan.resources.*
+import org.videolan.resources.AndroidDevices
+import org.videolan.resources.KEY_AUDIO_LAST_PLAYLIST
+import org.videolan.resources.KEY_CURRENT_AUDIO
+import org.videolan.resources.KEY_CURRENT_AUDIO_RESUME_ARTIST
+import org.videolan.resources.KEY_CURRENT_AUDIO_RESUME_THUMB
+import org.videolan.resources.KEY_CURRENT_AUDIO_RESUME_TITLE
+import org.videolan.resources.KEY_CURRENT_MEDIA
+import org.videolan.resources.KEY_CURRENT_MEDIA_RESUME
+import org.videolan.resources.KEY_MEDIA_LAST_PLAYLIST
+import org.videolan.resources.KEY_MEDIA_LAST_PLAYLIST_RESUME
+import org.videolan.resources.ROOM_DATABASE
+import org.videolan.resources.SCHEME_PACKAGE
+import org.videolan.resources.VLCInstance
 import org.videolan.tools.BitmapCache
 import org.videolan.tools.Settings
 import org.videolan.tools.putSingle
@@ -83,13 +95,12 @@ class PreferencesAdvanced : BasePreferenceFragment(), SharedPreferences.OnShared
 
     override fun onStart() {
         super.onStart()
-        preferenceScreen.sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.registerOnSharedPreferenceChangeListener(this)
     }
 
     override fun onStop() {
         super.onStop()
-        preferenceScreen.sharedPreferences
-                .unregisterOnSharedPreferenceChangeListener(this)
+        preferenceScreen.sharedPreferences!!.unregisterOnSharedPreferenceChangeListener(this)
     }
 
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
@@ -105,8 +116,18 @@ class PreferencesAdvanced : BasePreferenceFragment(), SharedPreferences.OnShared
                 val dialog = ConfirmDeleteDialog.newInstance(title = getString(R.string.clear_playback_history), description = getString(R.string.clear_history_message), buttonText = getString(R.string.clear_history))
                 dialog.show((activity as FragmentActivity).supportFragmentManager, RenameDialog::class.simpleName)
                 dialog.setListener {
-                    Medialibrary.getInstance().clearHistory()
-                    Settings.getInstance(requireActivity()).edit().remove(KEY_AUDIO_LAST_PLAYLIST).remove(KEY_MEDIA_LAST_PLAYLIST).apply()
+                    Medialibrary.getInstance().clearHistory(Medialibrary.HISTORY_TYPE_GLOBAL)
+                    Settings.getInstance(requireActivity()).edit()
+                        .remove(KEY_AUDIO_LAST_PLAYLIST)
+                        .remove(KEY_MEDIA_LAST_PLAYLIST)
+                        .remove(KEY_MEDIA_LAST_PLAYLIST_RESUME)
+                        .remove(KEY_CURRENT_AUDIO)
+                        .remove(KEY_CURRENT_MEDIA)
+                        .remove(KEY_CURRENT_MEDIA_RESUME)
+                        .remove(KEY_CURRENT_AUDIO_RESUME_TITLE)
+                        .remove(KEY_CURRENT_AUDIO_RESUME_ARTIST)
+                        .remove(KEY_CURRENT_AUDIO_RESUME_THUMB)
+                        .apply()
                 }
                 return true
             }
@@ -225,7 +246,8 @@ class PreferencesAdvanced : BasePreferenceFragment(), SharedPreferences.OnShared
         return super.onPreferenceTreeClick(preference)
     }
 
-    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+        if (sharedPreferences == null || key == null) return
         when (key) {
             "network_caching" -> {
                 sharedPreferences.edit {

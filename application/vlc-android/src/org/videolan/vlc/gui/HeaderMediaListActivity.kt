@@ -32,11 +32,12 @@ import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
-import android.widget.Toast
 import androidx.appcompat.view.ActionMode
 import androidx.appcompat.widget.SearchView
 import androidx.coordinatorlayout.widget.CoordinatorLayout
+import androidx.core.content.ContextCompat
 import androidx.databinding.DataBindingUtil
+import androidx.lifecycle.asFlow
 import androidx.lifecycle.lifecycleScope
 import androidx.paging.PagedList
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -44,14 +45,16 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.videolan.medialibrary.interfaces.Medialibrary
-import org.videolan.medialibrary.interfaces.media.Album
-import org.videolan.medialibrary.interfaces.media.MediaWrapper
-import org.videolan.medialibrary.interfaces.media.Playlist
+import org.videolan.medialibrary.interfaces.media.*
 import org.videolan.medialibrary.media.MediaLibraryItem
 import org.videolan.resources.*
+import org.videolan.resources.util.parcelable
 import org.videolan.tools.*
 import org.videolan.vlc.BuildConfig
 import org.videolan.vlc.R
@@ -66,6 +69,7 @@ import org.videolan.vlc.gui.helpers.ExpandStateAppBarLayoutBehavior
 import org.videolan.vlc.gui.helpers.SwipeDragItemTouchHelperCallback
 import org.videolan.vlc.gui.helpers.UiTools
 import org.videolan.vlc.gui.helpers.UiTools.addToPlaylist
+import org.videolan.vlc.gui.helpers.UiTools.showPinIfNeeded
 import org.videolan.vlc.gui.view.RecyclerSectionItemDecoration
 import org.videolan.vlc.interfaces.Filterable
 import org.videolan.vlc.interfaces.IEventsHandler
@@ -73,7 +77,10 @@ import org.videolan.vlc.interfaces.IListEventsHandler
 import org.videolan.vlc.media.MediaUtils
 import org.videolan.vlc.media.PlaylistManager
 import org.videolan.vlc.util.*
+import org.videolan.vlc.util.ContextOption.*
+import org.videolan.vlc.util.ContextOption.Companion.createCtxPlaylistItemFlags
 import org.videolan.vlc.util.FileUtils
+import org.videolan.vlc.viewmodels.PlaylistModel
 import org.videolan.vlc.viewmodels.mobile.PlaylistViewModel
 import org.videolan.vlc.viewmodels.mobile.getViewModel
 import java.security.SecureRandom
@@ -104,11 +111,15 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
         originalBottomPadding = fragmentContainer.paddingBottom
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         supportActionBar?.title = ""
+        binding.topmargin = 86.dp
+        toolbar.addOnLayoutChangeListener { v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            binding.topmargin = bottom + 8.dp
+        }
 
         val playlist = if (savedInstanceState != null)
-            savedInstanceState.getParcelable<Parcelable>(AudioBrowserFragment.TAG_ITEM) as MediaLibraryItem?
+            savedInstanceState.parcelable<Parcelable>(AudioBrowserFragment.TAG_ITEM) as MediaLibraryItem?
         else
-            intent.getParcelableExtra<Parcelable>(AudioBrowserFragment.TAG_ITEM) as MediaLibraryItem?
+            intent.parcelable<Parcelable>(AudioBrowserFragment.TAG_ITEM) as MediaLibraryItem?
         if (playlist == null) {
             finish()
             return
@@ -123,34 +134,64 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
             if (::itemTouchHelperCallback.isInitialized) itemTouchHelperCallback.swipeEnabled = true
         }
 
+        viewModel.playlistLiveData.observe(this) { playlist ->
+            binding.btnFavorite.setImageDrawable(
+                ContextCompat.getDrawable(this,
+                    if (playlist?.isFavorite == true) R.drawable.ic_header_media_favorite else R.drawable.ic_header_media_favorite_outline
+                )
+            )
+            binding.totalDuration = playlist?.tracks?.sumOf { it.length } ?: 0
+
+            if (playlist is Album) {
+                val releaseYear = playlist.releaseYear
+                binding.releaseYear = if (releaseYear > 0) releaseYear.toString() else ""
+                if (releaseYear <= 0) binding.releaseDate.visibility = View.GONE
+            }
+        }
+
         viewModel.tracksProvider.liveHeaders.observe(this) {
             binding.songs.invalidateItemDecorations()
         }
-        audioBrowserAdapter = AudioBrowserAdapter(MediaLibraryItem.TYPE_MEDIA, this, this, isPlaylist)
-        var totalDuration = 0L
-        for (item in viewModel.playlist.tracks)
-            totalDuration += item.length
-        binding.totalDuration = totalDuration
+
         if (isPlaylist) {
             audioBrowserAdapter = AudioBrowserAdapter(MediaLibraryItem.TYPE_MEDIA, this, this, isPlaylist)
-            itemTouchHelperCallback = SwipeDragItemTouchHelperCallback(audioBrowserAdapter)
+            itemTouchHelperCallback = SwipeDragItemTouchHelperCallback(audioBrowserAdapter, lockedInSafeMode = Settings.safeMode)
+            itemTouchHelperCallback.swipeAttemptListener = {
+                lifecycleScope.launch { showPinIfNeeded() }
+            }
             itemTouchHelper = ItemTouchHelper(itemTouchHelperCallback)
             itemTouchHelper!!.attachToRecyclerView(binding.songs)
             binding.releaseDate.visibility = View.GONE
         } else {
             audioBrowserAdapter = AudioAlbumTracksAdapter(MediaLibraryItem.TYPE_MEDIA, this, this)
             binding.songs.addItemDecoration(RecyclerSectionItemDecoration(resources.getDimensionPixelSize(R.dimen.recycler_section_header_height), true, viewModel.tracksProvider))
-            if (viewModel.playlist is Album) {
-                val releaseYear = (viewModel.playlist as Album).releaseYear
-                binding.releaseYear =  if (releaseYear > 0) releaseYear.toString() else ""
-                if (releaseYear <= 0) binding.releaseDate.visibility = View.GONE
-            }
+
         }
         binding.btnShuffle.setOnClickListener {
-            MediaUtils.playTracks(this, viewModel.playlist, SecureRandom().nextInt(min(playlist.tracksCount, MEDIALIBRARY_PAGE_SIZE)), true)
+            viewModel.playlist?.let { MediaUtils.playTracks(this, it, SecureRandom().nextInt(min(playlist.tracksCount, MEDIALIBRARY_PAGE_SIZE)), true) }
         }
         binding.btnAddPlaylist.setOnClickListener {
-            addToPlaylist(viewModel.playlist.tracks.toList())
+            viewModel.playlist?.let { addToPlaylist(it.tracks.toList()) }
+        }
+
+        binding.btnFavorite.setOnClickListener {
+            lifecycleScope.launch {
+                viewModel.toggleFavorite()
+            }
+        }
+
+        binding.headerListArtist.setOnClickListener {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    val artist = (viewModel.playlist as Album).retrieveAlbumArtist()
+                    val i = Intent(this@HeaderMediaListActivity, SecondaryActivity::class.java)
+                    i.putExtra(SecondaryActivity.KEY_FRAGMENT, SecondaryActivity.ALBUMS_SONGS)
+                    i.putExtra(AudioBrowserFragment.TAG_ITEM, artist)
+                    i.putExtra(ARTIST_FROM_ALBUM, true)
+                    i.flags = i.flags or Intent.FLAG_ACTIVITY_NO_HISTORY
+                    startActivity(i)
+                }
+            }
         }
 
         binding.songs.layoutManager = LinearLayoutManager(this)
@@ -158,10 +199,14 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
 
         val context = this
         lifecycleScope.launch {
+            var showBackground = true
             val cover = withContext(Dispatchers.IO) {
                 val width = if (binding.backgroundView.width > 0) binding.backgroundView.width else context.getScreenWidth()
                 if (!playlist.artworkMrl.isNullOrEmpty()) {
                     AudioUtil.fetchCoverBitmap(Uri.decode(playlist.artworkMrl), width)
+                } else if (playlist is Album) {
+                    showBackground = false
+                    UiTools.getDefaultAlbumDrawableBig(this@HeaderMediaListActivity).bitmap
                 } else {
                     ThumbnailsProvider.getPlaylistOrGenreImage("playlist:${playlist.id}_$width", playlist.tracks.toList(), width)
                 }
@@ -169,16 +214,38 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
             if (cover != null) {
                 binding.cover = BitmapDrawable(this@HeaderMediaListActivity.resources, cover)
                 binding.appbar.setExpanded(true, true)
-                val radius = if (isPlaylist) 25f else 15f
-                val blurredCover = UiTools.blurBitmap(cover, radius)
-                withContext(Dispatchers.Main) {
-                    binding.backgroundView.setColorFilter(UiTools.getColorFromAttribute(context, R.attr.audio_player_background_tint))
-                    binding.backgroundView.setImageBitmap(blurredCover)
+                if (showBackground) {
+                    val radius = if (isPlaylist) 25f else 15f
+                    UiTools.blurView(binding.backgroundView, cover, radius, UiTools.getColorFromAttribute(context, R.attr.audio_player_background_tint))
                 }
             }
         }
 
         binding.playBtn.setOnClickListener(this)
+
+        //swipe layout is only here to be able to make the recyclerview dispatch the scroll events
+        binding.swipeLayout.isEnabled = false
+        audioBrowserAdapter.areSectionsEnabled = false
+        binding.browserFastScroller.attachToCoordinator(binding.appbar, binding.coordinator, null)
+        binding.browserFastScroller.setRecyclerView(binding.songs, viewModel.tracksProvider)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val playlistModel = PlaylistModel.get(this)
+        PlaylistManager.currentPlayedMedia.observe(this) {
+            audioBrowserAdapter.currentMedia = it
+        }
+        playlistModel.dataset.asFlow().conflate().onEach {
+            audioBrowserAdapter.setCurrentlyPlaying(playlistModel.playing)
+            delay(50L)
+        }.launchWhenStarted(lifecycleScope)
+        audioBrowserAdapter.setModel(playlistModel)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        audioBrowserAdapter.setCurrentlyPlaying(false)
     }
 
     override fun onStop() {
@@ -187,7 +254,9 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
     }
 
     public override fun onSaveInstanceState(outState: Bundle) {
-        outState.putParcelable(AudioBrowserFragment.TAG_ITEM, viewModel.playlist)
+        viewModel.playlist?.let {
+            outState.putParcelable(AudioBrowserFragment.TAG_ITEM, it)
+        }
         super.onSaveInstanceState(outState)
     }
 
@@ -212,7 +281,7 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
         searchView.setOnQueryTextListener(this)
         val query = getFilterQuery()
         if (!query.isNullOrEmpty()) {
-            handler.post {
+            searchView.post {
                 searchItem.expandActionView()
                 searchView.clearFocus()
                 UiTools.setKeyboardVisibility(searchView, false)
@@ -293,10 +362,13 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
 
     override fun onCtxClick(v: View, position: Int, item: MediaLibraryItem) {
         if (actionMode == null) {
-            var flags = CTX_PLAYLIST_ITEM_FLAGS
             (item as? MediaWrapper)?.let { media ->
-                if (media.type == MediaWrapper.TYPE_STREAM || (media.type == MediaWrapper.TYPE_ALL && isSchemeHttpOrHttps(media.uri.scheme))) flags = flags or CTX_RENAME or CTX_COPY
-                else  flags = flags or CTX_SHARE
+                val flags = createCtxPlaylistItemFlags().apply {
+                    if (item.isFavorite) add(CTX_FAV_REMOVE) else add(CTX_FAV_ADD)
+                    if (media.type == MediaWrapper.TYPE_STREAM || (media.type == MediaWrapper.TYPE_ALL && isSchemeHttpOrHttps(media.uri.scheme)))
+                        addAll(CTX_COPY, CTX_RENAME)
+                    else add(CTX_SHARE)
+                }
                 showContext(this, this, position, media, flags)
             }
         }
@@ -309,7 +381,7 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
     override fun onRemove(position: Int, item: MediaLibraryItem) {
         lastDismissedPosition = position
         val tracks = ArrayList(listOf(*item.tracks))
-        removeFromPlaylist(tracks, ArrayList(listOf(position)))
+        lifecycleScope.launch {  removeFromPlaylist(tracks, ArrayList(listOf(position))) }
     }
 
     override fun onMove(oldPosition: Int, newPosition: Int) {
@@ -354,13 +426,13 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
         }
         val isMedia = audioBrowserAdapter.multiSelectHelper.getSelection()[0].itemType == MediaLibraryItem.TYPE_MEDIA
         val isSong = count == 1 && isMedia
-        //menu.findItem(R.id.action_mode_audio_playlist_up).setVisible(isSong && isPlaylist);
-        //menu.findItem(R.id.action_mode_audio_playlist_down).setVisible(isSong && isPlaylist);
         menu.findItem(R.id.action_mode_audio_set_song).isVisible = isSong && AndroidDevices.isPhone && !isPlaylist
         menu.findItem(R.id.action_mode_audio_info).isVisible = isSong
         menu.findItem(R.id.action_mode_audio_append).isVisible = PlaylistManager.hasMedia()
         menu.findItem(R.id.action_mode_audio_delete).isVisible = true
         menu.findItem(R.id.action_mode_audio_share).isVisible = isSong
+        menu.findItem(R.id.action_mode_favorite_add).isVisible = audioBrowserAdapter.multiSelectHelper.getSelection().none { it.isFavorite }
+        menu.findItem(R.id.action_mode_favorite_remove).isVisible = audioBrowserAdapter.multiSelectHelper.getSelection().none { !it.isFavorite }
         return true
     }
 
@@ -370,14 +442,6 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
         val tracks = ArrayList<MediaWrapper>()
         list.forEach { tracks.addAll(listOf(*it.tracks)) }
 
-        if (item.itemId == R.id.action_mode_audio_playlist_up) {
-            Toast.makeText(this, "UP !", Toast.LENGTH_SHORT).show()
-            return true
-        }
-        if (item.itemId == R.id.action_mode_audio_playlist_down) {
-            Toast.makeText(this, "DOWN !", Toast.LENGTH_SHORT).show()
-            return true
-        }
         val indexes = audioBrowserAdapter.multiSelectHelper.selectionMap
 
         when (item.itemId) {
@@ -387,7 +451,9 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
             R.id.action_mode_audio_info -> showInfoDialog(list[0] as MediaWrapper)
             R.id.action_mode_audio_share -> lifecycleScope.launch { share(list.map { it as MediaWrapper }) }
             R.id.action_mode_audio_set_song -> setRingtone(list[0] as MediaWrapper)
-            R.id.action_mode_audio_delete -> if (isPlaylist) removeFromPlaylist(tracks, indexes.toMutableList()) else removeItems(tracks)
+            R.id.action_mode_audio_delete -> lifecycleScope.launch { if (isPlaylist) removeFromPlaylist(tracks, indexes.toMutableList()) else removeItems(tracks) }
+            R.id.action_mode_favorite_add -> lifecycleScope.launch { viewModel.changeFavorite(tracks, true) }
+            R.id.action_mode_favorite_remove -> lifecycleScope.launch { viewModel.changeFavorite(tracks, false) }
             else -> return false
         }
         stopActionMode()
@@ -406,12 +472,12 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
         startActivity(i)
     }
 
-    override fun onCtxAction(position: Int, option: Long) {
+    override fun onCtxAction(position: Int, option: ContextOption) {
         if (position >= audioBrowserAdapter.itemCount) return
         val media = audioBrowserAdapter.getItem(position) as MediaWrapper? ?: return
         when (option) {
             CTX_INFORMATION -> showInfoDialog(media)
-            CTX_DELETE -> removeItem(position, media)
+            CTX_DELETE -> lifecycleScope.launch { removeItem(position, media) }
             CTX_APPEND -> MediaUtils.appendMedia(this, media.tracks)
             CTX_PLAY_NEXT -> MediaUtils.insertNext(this, media.tracks)
             CTX_ADD_TO_PLAYLIST -> addToPlaylist(media.tracks, SavePlaylistDialog.KEY_NEW_TRACKS)
@@ -430,11 +496,15 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
                 copy(media.title, media.location)
                 Snackbar.make(window.decorView.findViewById(android.R.id.content), R.string.url_copied_to_clipboard, Snackbar.LENGTH_LONG).show()
             }
+            CTX_FAV_ADD, CTX_FAV_REMOVE -> lifecycleScope.launch {
+                media.isFavorite = option == CTX_FAV_ADD
+            }
+            else -> {}
         }
 
     }
 
-    private fun removeItem(position: Int, media: MediaWrapper) {
+    private suspend fun removeItem(position: Int, media: MediaWrapper) {
         if (isPlaylist) {
             removeFromPlaylist(listOf(media), listOf(position))
         } else {
@@ -479,38 +549,48 @@ open class HeaderMediaListActivity : AudioPlayerContainerActivity(), IEventsHand
         MediaUtils.playTracks(this, viewModel.tracksProvider, 0)
     }
 
-    private fun removeFromPlaylist(list: List<MediaWrapper>, indexes: List<Int>) {
-        val itemsRemoved = HashMap<Int, Long>()
-        val playlist = viewModel.playlist as? Playlist
-                ?: return
+    private suspend fun removeFromPlaylist(list: List<MediaWrapper>, indexes: List<Int>) {
+        if (!showPinIfNeeded()) {
+            val itemsRemoved = HashMap<Int, Long>()
+            val playlist = viewModel.playlist as? Playlist
+                    ?: return
 
-        itemTouchHelperCallback.swipeEnabled = false
-        lifecycleScope.launchWhenStarted {
-            val tracks = withContext(Dispatchers.IO) { playlist.tracks }
-            withContext(Dispatchers.IO) {
-                for ((index, playlistIndex) in indexes.sortedBy { it }.withIndex()) {
-                    val trueIndex = viewModel.playlist.tracks.indexOf(list[index])
-                    itemsRemoved[trueIndex] = tracks[playlistIndex].id
-                    playlist.remove(trueIndex)
-                }
-            }
-            var removedMessage = if (indexes.size>1) getString(R.string.removed_from_playlist_anonymous) else getString(R.string.remove_playlist_item,list.first().title)
-            UiTools.snackerWithCancel(this@HeaderMediaListActivity, removedMessage, action = {
-                lastDismissedPosition = -1
-            }) {
-                for ((key, value) in itemsRemoved) {
-                    playlist.add(value, key)
-                    if (lastDismissedPosition != -1) {
-                        audioBrowserAdapter.notifyItemChanged(lastDismissedPosition)
-                        lastDismissedPosition = -1
+            itemTouchHelperCallback.swipeEnabled = false
+            lifecycleScope.launchWhenStarted {
+                val tracks = withContext(Dispatchers.IO) { playlist.tracks }
+                viewModel.playlist?.let { playlist ->
+                    withContext(Dispatchers.IO) {
+                        for ((index, playlistIndex) in indexes.sortedBy { it }.withIndex()) {
+                            val trueIndex = playlist.tracks.indexOf(list[index])
+                            itemsRemoved[trueIndex] = tracks[playlistIndex].id
+                            (playlist as Playlist).remove(trueIndex)
+                        }
                     }
                 }
+                var removedMessage = if (indexes.size > 1) getString(R.string.removed_from_playlist_anonymous) else getString(R.string.remove_playlist_item, list.first().title)
+                UiTools.snackerWithCancel(this@HeaderMediaListActivity, removedMessage, action = {
+                    lastDismissedPosition = -1
+                }) {
+                    for ((key, value) in itemsRemoved) {
+                        playlist.add(value, key)
+                        if (lastDismissedPosition != -1) {
+                            audioBrowserAdapter.notifyItemChanged(lastDismissedPosition)
+                            lastDismissedPosition = -1
+                        }
+                    }
+                }
+            }
+        } else {
+            if (lastDismissedPosition != -1) {
+                audioBrowserAdapter.notifyItemChanged(lastDismissedPosition)
+                lastDismissedPosition = -1
             }
         }
     }
 
     companion object {
 
+        const val ARTIST_FROM_ALBUM = "ARTIST_FROM_ALBUM"
         const val TAG = "VLC/PlaylistActivity"
     }
 
